@@ -230,9 +230,10 @@ export default function App() {
   const filteredIncomeTotal = filteredIncome.reduce((s, t) => s + t.amount, 0);
 
   // ── Budget editing ───────────────────────────────────────────────
-  const [editingItemId, setEditingItemId] = useState<string | null>(null);
-  const [editPlanned, setEditPlanned]     = useState('');
-  const [editActual, setEditActual]       = useState('');
+  const [editingItemId, setEditingItemId]   = useState<string | null>(null);
+  const [editPlanned, setEditPlanned]       = useState('');
+  const [editActual, setEditActual]         = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const startEdit = (item: BudgetItem) => {
     setEditingItemId(item.id);
@@ -277,6 +278,14 @@ export default function App() {
       ),
     [monthlyBudgetItems]
   );
+
+  // Balance if all planned budget amounts were followed exactly
+  const allPersonsPlanned = useMemo(
+    () => budgetItems.filter((b) => b.month === activeMonth).reduce((s, b) => s + b.planned, 0),
+    [budgetItems, activeMonth]
+  );
+  const balanceIfBudgeted =
+    startingBalance + monthlyTotals.income - monthlyTotals.expense - monthlyTotals.savings - allPersonsPlanned;
 
   const chartData = [
     { name: 'Income',   value: monthlyTotals.income,  color: '#10b981' },
@@ -352,6 +361,10 @@ export default function App() {
                       <p className="text-[10px] uppercase tracking-widest font-semibold text-zinc-400">Ending Balance</p>
                       <p className={`text-lg font-bold ${endingBalance >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                         ${endingBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </p>
+                      <p className="text-[10px] text-zinc-500 mt-0.5">If budgeted:</p>
+                      <p className={`text-sm font-bold ${balanceIfBudgeted >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                        ${balanceIfBudgeted.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                       </p>
                     </div>
                   </div>
@@ -549,10 +562,24 @@ export default function App() {
                         {editingItemId === item.id ? (
                           <>
                             <span className="flex-1 text-sm font-medium truncate">{item.name}</span>
-                            <input type="number" value={editPlanned} onChange={(e) => setEditPlanned(e.target.value)}
-                              className="w-20 text-right text-sm font-bold bg-emerald-50 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-emerald-200" placeholder="0" />
-                            <input type="number" value={editActual} onChange={(e) => setEditActual(e.target.value)}
-                              className="w-20 text-right text-sm font-bold bg-rose-50 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-rose-200" placeholder="0" />
+                            <input
+                              type="number"
+                              value={editPlanned}
+                              onChange={(e) => setEditPlanned(e.target.value)}
+                              onFocus={(e) => e.target.select()}
+                              onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
+                              className="w-20 text-right text-sm font-bold bg-emerald-50 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-emerald-200"
+                              placeholder="0"
+                            />
+                            <input
+                              type="number"
+                              value={editActual}
+                              onChange={(e) => setEditActual(e.target.value)}
+                              onFocus={(e) => e.target.select()}
+                              onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
+                              className="w-20 text-right text-sm font-bold bg-rose-50 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-rose-200"
+                              placeholder="0"
+                            />
                             <div className="flex gap-1">
                               <button onClick={saveEdit} className="w-6 h-6 flex items-center justify-center rounded-full bg-emerald-100 text-emerald-600"><Check className="w-3 h-3" /></button>
                               <button onClick={() => setEditingItemId(null)} className="w-6 h-6 flex items-center justify-center rounded-full bg-zinc-100 text-zinc-500"><X className="w-3 h-3" /></button>
@@ -567,7 +594,7 @@ export default function App() {
                             </span>
                             <div className="flex gap-1">
                               <button onClick={() => startEdit(item)} className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-zinc-100 text-zinc-400"><PenLine className="w-3 h-3" /></button>
-                              <button onClick={() => deleteBudgetItem(item.id)} className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-red-50 text-zinc-300 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
+                              <button onClick={() => setConfirmDeleteId(item.id)} className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-red-50 text-zinc-300 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
                             </div>
                           </>
                         )}
@@ -693,6 +720,36 @@ export default function App() {
 
         </AnimatePresence>
       </main>
+
+      {/* Delete Confirmation Modal */}
+      {confirmDeleteId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setConfirmDeleteId(null)} />
+          <div className="relative bg-white rounded-3xl shadow-xl p-6 w-full max-w-sm space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-red-100 rounded-xl text-red-600"><Trash2 className="w-5 h-5" /></div>
+              <div>
+                <p className="text-sm font-bold text-zinc-900">Delete item?</p>
+                <p className="text-xs text-zinc-500">This cannot be undone.</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmDeleteId(null)}
+                className="flex-1 h-11 rounded-2xl bg-zinc-100 text-zinc-700 text-sm font-bold hover:bg-zinc-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => { await deleteBudgetItem(confirmDeleteId); setConfirmDeleteId(null); }}
+                className="flex-1 h-11 rounded-2xl bg-red-600 text-white text-sm font-bold hover:bg-red-700 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Settings Drawer */}
       <Drawer open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
