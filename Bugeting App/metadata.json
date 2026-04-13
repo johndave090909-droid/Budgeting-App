@@ -1,0 +1,5 @@
+{
+  "name": "Budgetly",
+  "description": "A mobile-first budgeting app to track income, expenses, savings, and financial goals.",
+  "requestFramePermissions": []
+}
