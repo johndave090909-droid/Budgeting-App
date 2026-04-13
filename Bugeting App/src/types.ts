@@ -25,6 +25,16 @@ export type Category = {
   color: string;
 };
 
+export interface BudgetItem {
+  id: string;
+  group: string;
+  name: string;
+  planned: number;
+  actual: number;
+  month: string;   // "YYYY-MM"
+  person?: string; // "p0" | "p1" — optional for backward compat during migration
+}
+
 export const CATEGORIES: Record<TransactionType, Category[]> = {
   income: [
     { id: 'salary', name: 'Salary', icon: 'Briefcase', color: 'bg-emerald-500' },
