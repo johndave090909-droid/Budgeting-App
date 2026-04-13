@@ -7,6 +7,7 @@ export interface Transaction {
   category: string;
   description: string;
   date: string;
+  person?: string; // "p0" | "p1" | ... | "both"
 }
 
 export interface Goal {
@@ -33,6 +34,16 @@ export interface BudgetItem {
   actual: number;
   month: string;   // "YYYY-MM"
   person?: string; // "p0" | "p1" — optional for backward compat during migration
+}
+
+export interface Bill {
+  id: string;
+  name: string;
+  amount: number;       // default / suggested amount
+  dueDay: number;       // day of month (1–31)
+  type: 'fixed' | 'variable';
+  person?: string;      // "p0" | "p1" | "both"
+  paidAmounts: Record<string, number>; // { "2026-04": 120.50 }
 }
 
 export const CATEGORIES: Record<TransactionType, Category[]> = {

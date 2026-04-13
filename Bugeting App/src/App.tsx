@@ -21,8 +21,8 @@ import {
   ChevronRight,
   Settings,
 } from 'lucide-react';
-import { useBudget, PERSON_IDS } from './hooks/useBudget';
-import { CATEGORIES, TransactionType, BudgetItem } from './types';
+import { useBudget, getPersonIds } from './hooks/useBudget';
+import { CATEGORIES, TransactionType, BudgetItem, Bill } from './types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -47,7 +47,7 @@ import {
   Cell,
 } from 'recharts';
 
-type Tab = 'dashboard' | 'income' | 'budget' | 'transactions' | 'goals';
+type Tab = 'dashboard' | 'income' | 'expenses' | 'budget' | 'transactions' | 'goals';
 type IncomePeriod = 'weekly' | 'biweekly' | 'monthly' | 'yearly';
 
 const GROUP_ORDER = ['Paying The Lord', 'Food and Hygiene', 'Savings and Others', 'Recreation'];
@@ -62,6 +62,7 @@ export default function App() {
     transactions,
     goals,
     budgetItems,
+    bills,
     personNames,
     updatePersonNames,
     seedMonthBudgetItems,
@@ -73,9 +74,14 @@ export default function App() {
     updateBudgetItem,
     addBudgetItem,
     deleteBudgetItem,
+    addBill,
+    deleteBill,
+    updateBill,
+    toggleBillPaid,
   } = useBudget();
 
   // ── Person tabs ──────────────────────────────────────────────────
+  const personIds = useMemo(() => getPersonIds(personNames.length), [personNames.length]);
   const [activePerson, setActivePerson] = useState<string>('p0');
 
   // ── Settings drawer ──────────────────────────────────────────────
@@ -101,8 +107,8 @@ export default function App() {
   // Seed budget items for all persons when navigating to a new month
   useEffect(() => {
     if (budgetItems.length === 0) return;
-    PERSON_IDS.forEach((pid) => seedMonthBudgetItems(activeMonth, pid));
-  }, [activeMonth, budgetItems.length]);
+    personIds.forEach((pid) => seedMonthBudgetItems(activeMonth, pid));
+  }, [activeMonth, budgetItems.length, personIds.length]);
 
   // ── Monthly ledger computations ──────────────────────────────────
   //
@@ -123,8 +129,15 @@ export default function App() {
       return acc - b.actual;
     }, 0);
 
-    return txContrib + budgetContrib;
-  }, [transactions, budgetItems, activeMonth]);
+    const billContrib = bills.reduce((acc, b) => {
+      const pastPaid = Object.entries(b.paidAmounts ?? {})
+        .filter(([m]) => m < activeMonth)
+        .reduce((s, [, v]) => s + v, 0);
+      return acc - pastPaid;
+    }, 0);
+
+    return txContrib + budgetContrib + billContrib;
+  }, [transactions, budgetItems, bills, activeMonth]);
 
   const monthlyTransactions = useMemo(
     () => transactions.filter((t) => monthKey(t.date) === activeMonth),
@@ -159,13 +172,18 @@ export default function App() {
   // Per-person budget actuals for dashboard breakdown
   const perPersonActual = useMemo(
     () =>
-      PERSON_IDS.map((pid, i) => ({
+      personIds.map((pid, i) => ({
         name: personNames[i] ?? pid,
         actual: budgetItems
           .filter((b) => b.month === activeMonth && (b.person ?? 'p0') === pid)
           .reduce((s, b) => s + b.actual, 0),
       })),
-    [budgetItems, activeMonth, personNames]
+    [budgetItems, activeMonth, personNames, personIds]
+  );
+
+  const monthlyBillPayments = useMemo(
+    () => bills.reduce((s, b) => s + (b.paidAmounts?.[activeMonth] ?? 0), 0),
+    [bills, activeMonth]
   );
 
   const endingBalance =
@@ -173,7 +191,62 @@ export default function App() {
     monthlyTotals.income -
     monthlyTotals.expense -
     monthlyTotals.savings -
-    monthlyBudgetActual;
+    monthlyBudgetActual -
+    monthlyBillPayments;
+
+  // ── Expense (bills) tab state ────────────────────────────────────
+  const [isAddBillOpen, setIsAddBillOpen]         = useState(false);
+  const [confirmBillDeleteId, setConfirmBillDeleteId] = useState<string | null>(null);
+  const [variableBillId, setVariableBillId]       = useState<string | null>(null);
+  const [variableAmount, setVariableAmount]       = useState('');
+  const [newBill, setNewBill] = useState({
+    name: '',
+    amount: '',
+    dueDay: '1',
+    type: 'fixed' as 'fixed' | 'variable',
+    person: 'p0',
+  });
+
+  const handleAddBill = async () => {
+    if (!newBill.name || !newBill.amount) return;
+    await addBill({
+      name: newBill.name,
+      amount: parseFloat(newBill.amount) || 0,
+      dueDay: parseInt(newBill.dueDay) || 1,
+      type: newBill.type,
+      person: newBill.person,
+      paidAmounts: {},
+    });
+    setNewBill({ name: '', amount: '', dueDay: '1', type: 'fixed', person: 'p0' });
+    setIsAddBillOpen(false);
+  };
+
+  const handleCheckBill = (bill: Bill) => {
+    const isPaid = bill.paidAmounts?.[activeMonth] !== undefined;
+    if (isPaid) {
+      // Uncheck — remove the payment
+      toggleBillPaid(bill.id, activeMonth);
+    } else if (bill.type === 'variable') {
+      // Variable — ask for actual amount
+      setVariableAmount(String(bill.amount));
+      setVariableBillId(bill.id);
+    } else {
+      // Fixed — use default amount
+      toggleBillPaid(bill.id, activeMonth);
+    }
+  };
+
+  // Sort bills by due day
+  const sortedBills = useMemo(
+    () => [...bills].sort((a, b) => a.dueDay - b.dueDay),
+    [bills]
+  );
+
+  const billTotals = useMemo(() => {
+    const total = bills.reduce((s, b) => s + b.amount, 0);
+    const paid  = bills.reduce((s, b) => s + (b.paidAmounts?.[activeMonth] ?? 0), 0);
+    return { total, paid, remaining: total - paid };
+  }, [bills, activeMonth]);
 
   // ── Add transaction ──────────────────────────────────────────────
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -185,6 +258,7 @@ export default function App() {
     category: '',
     description: '',
     date: format(new Date(), 'yyyy-MM-dd'),
+    person: 'p0',
   });
 
   const handleAddTransaction = async () => {
@@ -202,8 +276,9 @@ export default function App() {
           CATEGORIES[newTx.type].find((c) => c.id === newTx.category)?.name ||
           '',
         date: newTx.date,
+        person: newTx.person,
       });
-      setNewTx({ type: 'expense', amount: '', category: '', description: '', date: format(new Date(), 'yyyy-MM-dd') });
+      setNewTx({ type: 'expense', amount: '', category: '', description: '', date: format(new Date(), 'yyyy-MM-dd'), person: 'p0' });
       setIsAddOpen(false);
     } catch {
       setTxError('Failed to save. Check your connection.');
@@ -231,20 +306,58 @@ export default function App() {
 
   // ── Budget editing ───────────────────────────────────────────────
   const [editingItemId, setEditingItemId]   = useState<string | null>(null);
+  const [editName, setEditName]             = useState('');
+  const [editGroup, setEditGroup]           = useState('');
   const [editPlanned, setEditPlanned]       = useState('');
   const [editActual, setEditActual]         = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const startEdit = (item: BudgetItem) => {
     setEditingItemId(item.id);
+    setEditName(item.name);
+    setEditGroup(item.group);
     setEditPlanned(String(item.planned));
     setEditActual(String(item.actual));
   };
 
   const saveEdit = async () => {
     if (!editingItemId) return;
-    await updateBudgetItem(editingItemId, parseFloat(editPlanned) || 0, parseFloat(editActual) || 0);
+    await updateBudgetItem(editingItemId, {
+      name: editName.trim() || 'Unnamed',
+      group: editGroup,
+      planned: parseFloat(editPlanned) || 0,
+      actual: parseFloat(editActual) || 0,
+    });
     setEditingItemId(null);
+  };
+
+  // ── Bill editing ─────────────────────────────────────────────────
+  const [editingBillId, setEditingBillId] = useState<string | null>(null);
+  const [editBill, setEditBill] = useState({
+    name: '', amount: '', dueDay: '', type: 'fixed' as 'fixed' | 'variable', person: 'p0',
+  });
+
+  const startEditBill = (bill: Bill) => {
+    setEditingBillId(bill.id);
+    setEditBill({
+      name: bill.name,
+      amount: String(bill.amount),
+      dueDay: String(bill.dueDay),
+      type: bill.type,
+      person: bill.person ?? 'p0',
+    });
+  };
+
+  const saveEditBill = async () => {
+    if (!editingBillId) return;
+    await updateBill(editingBillId, {
+      name: editBill.name.trim() || 'Unnamed',
+      amount: parseFloat(editBill.amount) || 0,
+      dueDay: parseInt(editBill.dueDay) || 1,
+      type: editBill.type,
+      person: editBill.person,
+    });
+    setEditingBillId(null);
   };
 
   // ── Add budget item ──────────────────────────────────────────────
@@ -284,8 +397,13 @@ export default function App() {
     () => budgetItems.filter((b) => b.month === activeMonth).reduce((s, b) => s + b.planned, 0),
     [budgetItems, activeMonth]
   );
+  const allBillsTotal = useMemo(
+    () => bills.reduce((s, b) => s + b.amount, 0),
+    [bills]
+  );
+
   const balanceIfBudgeted =
-    startingBalance + monthlyTotals.income - monthlyTotals.expense - monthlyTotals.savings - allPersonsPlanned;
+    startingBalance + monthlyTotals.income - monthlyTotals.expense - monthlyTotals.savings - allPersonsPlanned - allBillsTotal;
 
   const chartData = [
     { name: 'Income',   value: monthlyTotals.income,  color: '#10b981' },
@@ -424,7 +542,7 @@ export default function App() {
                 </div>
                 <div className="space-y-3">
                   {monthlyTransactions.slice(0, 4).map((tx) => (
-                    <TxRow key={tx.id} tx={tx} onDelete={deleteTransaction} />
+                    <TxRow key={tx.id} tx={tx} onDelete={deleteTransaction} personNames={personNames} />
                   ))}
                   {monthlyTransactions.length === 0 && (
                     <div className="text-center py-8 bg-white rounded-2xl border border-dashed border-zinc-200">
@@ -471,12 +589,285 @@ export default function App() {
 
               <div className="space-y-3">
                 {filteredIncome.map((tx) => (
-                  <TxRow key={tx.id} tx={tx} onDelete={deleteTransaction} />
+                  <TxRow key={tx.id} tx={tx} onDelete={deleteTransaction} personNames={personNames} />
                 ))}
                 {filteredIncome.length === 0 && (
                   <div className="text-center py-12 bg-white rounded-3xl border border-dashed border-zinc-200">
                     <TrendingUp className="w-10 h-10 text-zinc-200 mx-auto mb-2" />
                     <p className="text-sm text-zinc-400">No income for this period</p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {/* ── EXPENSES (bills) ── */}
+          {activeTab === 'expenses' && (
+            <motion.div key="expenses" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-5">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold">Bills &amp; Expenses</h2>
+                <Drawer open={isAddBillOpen} onOpenChange={setIsAddBillOpen}>
+                  <DrawerTrigger asChild>
+                    <Button variant="outline" size="sm" className="rounded-full text-xs">+ Add Bill</Button>
+                  </DrawerTrigger>
+                  <DrawerContent className="max-w-md mx-auto">
+                    <DrawerHeader><DrawerTitle>Add Bill</DrawerTitle></DrawerHeader>
+                    <div className="p-6 space-y-4">
+                      <div className="space-y-2">
+                        <Label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Bill Name</Label>
+                        <Input
+                          value={newBill.name}
+                          onChange={(e) => setNewBill({ ...newBill, name: e.target.value })}
+                          placeholder="e.g. Rent, Netflix"
+                          className="h-12 rounded-xl bg-zinc-50 border-none"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Amount</Label>
+                        <div className="relative">
+                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 font-bold">$</span>
+                          <Input
+                            type="number"
+                            value={newBill.amount}
+                            onChange={(e) => setNewBill({ ...newBill, amount: e.target.value })}
+                            placeholder="0.00"
+                            className="pl-8 h-12 rounded-xl bg-zinc-50 border-none"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                          <Label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Due Day</Label>
+                          <Input
+                            type="number"
+                            min="1" max="31"
+                            value={newBill.dueDay}
+                            onChange={(e) => setNewBill({ ...newBill, dueDay: e.target.value })}
+                            className="h-12 rounded-xl bg-zinc-50 border-none"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Type</Label>
+                          <select
+                            value={newBill.type}
+                            onChange={(e) => setNewBill({ ...newBill, type: e.target.value as 'fixed' | 'variable' })}
+                            className="w-full h-12 rounded-xl bg-zinc-50 border-none px-4 text-sm font-medium text-zinc-900 appearance-none focus:outline-none focus:ring-2 focus:ring-zinc-200"
+                          >
+                            <option value="fixed">Fixed</option>
+                            <option value="variable">Variable</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Who</Label>
+                        <select
+                          value={newBill.person}
+                          onChange={(e) => setNewBill({ ...newBill, person: e.target.value })}
+                          className="w-full h-12 rounded-xl bg-zinc-50 border-none px-4 text-sm font-medium text-zinc-900 appearance-none focus:outline-none focus:ring-2 focus:ring-zinc-200"
+                        >
+                          {personNames.map((name, i) => (
+                            <option key={`p${i}`} value={`p${i}`}>{name}</option>
+                          ))}
+                          <option value="both">Both</option>
+                        </select>
+                      </div>
+                      <Button
+                        className="w-full h-12 rounded-2xl bg-zinc-900 text-white font-bold"
+                        onClick={handleAddBill}
+                      >
+                        Add Bill
+                      </Button>
+                    </div>
+                  </DrawerContent>
+                </Drawer>
+              </div>
+
+              {/* Summary cards */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-white rounded-2xl p-3 shadow-sm text-center">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Total</p>
+                  <p className="text-sm font-bold text-zinc-900">${billTotals.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="bg-emerald-50 rounded-2xl p-3 shadow-sm text-center">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-500">Paid</p>
+                  <p className="text-sm font-bold text-emerald-700">${billTotals.paid.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="bg-rose-50 rounded-2xl p-3 shadow-sm text-center">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-rose-400">Remaining</p>
+                  <p className="text-sm font-bold text-rose-600">${billTotals.remaining.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                </div>
+              </div>
+
+              {/* Bill list */}
+              <div className="space-y-2">
+                {sortedBills.map((bill) => {
+                  const isPaid    = bill.paidAmounts?.[activeMonth] !== undefined;
+                  const paidAmt   = bill.paidAmounts?.[activeMonth] ?? 0;
+                  const personLabel = bill.person === 'both'
+                    ? 'Both'
+                    : bill.person
+                      ? personNames[parseInt(bill.person.replace('p', ''))] ?? bill.person
+                      : null;
+                  const dueDateStr = (() => {
+                    try {
+                      const d = new Date(`${activeMonth}-${String(bill.dueDay).padStart(2, '0')}T12:00:00`);
+                      return format(d, 'MMM dd');
+                    } catch { return `Day ${bill.dueDay}`; }
+                  })();
+
+                  return (
+                    <div key={bill.id} className={`bg-white rounded-2xl shadow-sm overflow-hidden transition-opacity ${isPaid && editingBillId !== bill.id ? 'opacity-60' : ''}`}>
+                      {editingBillId === bill.id ? (
+                        /* ── Edit mode ── */
+                        <div className="p-4 space-y-3">
+                          <input
+                            type="text"
+                            value={editBill.name}
+                            onChange={(e) => setEditBill({ ...editBill, name: e.target.value })}
+                            onFocus={(e) => e.target.select()}
+                            onKeyDown={(e) => e.key === 'Enter' && saveEditBill()}
+                            className="w-full text-sm font-bold bg-zinc-50 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-zinc-200"
+                            placeholder="Bill name"
+                          />
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">Amount</p>
+                              <div className="relative">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 text-sm font-bold">$</span>
+                                <input
+                                  type="number"
+                                  value={editBill.amount}
+                                  onChange={(e) => setEditBill({ ...editBill, amount: e.target.value })}
+                                  onFocus={(e) => e.target.select()}
+                                  onKeyDown={(e) => e.key === 'Enter' && saveEditBill()}
+                                  className="w-full pl-7 text-sm font-bold bg-zinc-50 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-zinc-200"
+                                  placeholder="0.00"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">Due Day</p>
+                              <input
+                                type="number"
+                                min="1" max="31"
+                                value={editBill.dueDay}
+                                onChange={(e) => setEditBill({ ...editBill, dueDay: e.target.value })}
+                                onFocus={(e) => e.target.select()}
+                                onKeyDown={(e) => e.key === 'Enter' && saveEditBill()}
+                                className="w-full text-sm font-bold bg-zinc-50 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-zinc-200"
+                              />
+                            </div>
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">Type</p>
+                              <select
+                                value={editBill.type}
+                                onChange={(e) => setEditBill({ ...editBill, type: e.target.value as 'fixed' | 'variable' })}
+                                className="w-full text-sm font-medium bg-zinc-50 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-zinc-200 appearance-none"
+                              >
+                                <option value="fixed">Fixed</option>
+                                <option value="variable">Variable</option>
+                              </select>
+                            </div>
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">Who</p>
+                              <select
+                                value={editBill.person}
+                                onChange={(e) => setEditBill({ ...editBill, person: e.target.value })}
+                                className="w-full text-sm font-medium bg-zinc-50 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-zinc-200 appearance-none"
+                              >
+                                {personNames.map((name, i) => (
+                                  <option key={`p${i}`} value={`p${i}`}>{name}</option>
+                                ))}
+                                <option value="both">Both</option>
+                              </select>
+                            </div>
+                          </div>
+                          <div className="flex gap-2 pt-1">
+                            <button
+                              onClick={saveEditBill}
+                              className="flex-1 h-9 rounded-xl bg-zinc-900 text-white text-xs font-bold flex items-center justify-center gap-1"
+                            >
+                              <Check className="w-3.5 h-3.5" /> Save
+                            </button>
+                            <button
+                              onClick={() => setEditingBillId(null)}
+                              className="flex-1 h-9 rounded-xl bg-zinc-100 text-zinc-600 text-xs font-bold"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        /* ── Display mode ── */
+                        <div className="flex items-center gap-3 px-4 py-3">
+                          {/* Checkbox */}
+                          <button
+                            onClick={() => handleCheckBill(bill)}
+                            className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+                              isPaid
+                                ? 'bg-emerald-500 border-emerald-500 text-white'
+                                : 'border-zinc-300 hover:border-emerald-400'
+                            }`}
+                          >
+                            {isPaid && <Check className="w-3 h-3" />}
+                          </button>
+
+                          {/* Info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <p className={`text-sm font-bold truncate ${isPaid ? 'line-through text-zinc-400' : 'text-zinc-900'}`}>
+                                {bill.name}
+                              </p>
+                              <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full ${
+                                bill.type === 'fixed' ? 'bg-blue-100 text-blue-600' : 'bg-amber-100 text-amber-600'
+                              }`}>
+                                {bill.type}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-[10px] text-zinc-400">Due {dueDateStr}</p>
+                              {personLabel && (
+                                <>
+                                  <span className="w-1 h-1 rounded-full bg-zinc-300 inline-block" />
+                                  <span className="text-[10px] text-zinc-400 font-medium">{personLabel}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Amount */}
+                          <div className="text-right">
+                            {isPaid ? (
+                              <p className="text-sm font-bold text-emerald-600">${paidAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                            ) : (
+                              <p className="text-sm font-bold text-zinc-900">${bill.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                            )}
+                          </div>
+
+                          {/* Edit + Delete */}
+                          <button
+                            onClick={() => startEditBill(bill)}
+                            className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-zinc-100 text-zinc-400 flex-shrink-0"
+                          >
+                            <PenLine className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => setConfirmBillDeleteId(bill.id)}
+                            className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-red-50 text-zinc-300 hover:text-red-400 flex-shrink-0"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {sortedBills.length === 0 && (
+                  <div className="text-center py-12 bg-white rounded-3xl border border-dashed border-zinc-200">
+                    <TrendingDown className="w-10 h-10 text-zinc-200 mx-auto mb-2" />
+                    <p className="text-sm text-zinc-400">No bills added yet</p>
+                    <p className="text-xs text-zinc-300">Tap "+ Add Bill" to get started</p>
                   </div>
                 )}
               </div>
@@ -489,9 +880,9 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-lg font-bold">Budget Plan</h2>
-                  {/* Person tabs */}
-                  <div className="flex gap-1 mt-1">
-                    {PERSON_IDS.map((pid, i) => (
+                  {/* Person tabs — dynamic */}
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {personIds.map((pid, i) => (
                       <button
                         key={pid}
                         onClick={() => setActivePerson(pid)}
@@ -553,40 +944,75 @@ export default function App() {
                 </span>
               </div>
 
+              {/* Person's income for this month */}
+              {(() => {
+                const personIncome = monthlyTransactions
+                  .filter((t) => t.type === 'income' && (t.person === activePerson || t.person === 'both'))
+                  .reduce((s, t) => s + t.amount, 0);
+                const personName = personNames[personIds.indexOf(activePerson)] ?? activePerson;
+                return (
+                  <div className="flex items-center justify-between bg-emerald-50 rounded-xl px-4 py-2.5">
+                    <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">{personName}'s Income</span>
+                    <span className="text-sm font-bold text-emerald-600">
+                      ${personIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                );
+              })()}
+
               {Object.keys(budgetGroups).map((group) => (
                 <div key={group} className="space-y-1">
                   <p className="text-xs font-bold uppercase tracking-wider text-zinc-500 px-1">{group}</p>
                   <div className="space-y-1">
                     {budgetGroups[group].map((item) => (
-                      <div key={item.id} className="flex items-center gap-2 bg-white rounded-xl px-4 py-3 shadow-sm">
+                      <div key={item.id} className="bg-white rounded-xl shadow-sm overflow-hidden">
                         {editingItemId === item.id ? (
-                          <>
-                            <span className="flex-1 text-sm font-medium truncate">{item.name}</span>
-                            <input
-                              type="number"
-                              value={editPlanned}
-                              onChange={(e) => setEditPlanned(e.target.value)}
-                              onFocus={(e) => e.target.select()}
-                              onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
-                              className="w-20 text-right text-sm font-bold bg-emerald-50 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-emerald-200"
-                              placeholder="0"
-                            />
-                            <input
-                              type="number"
-                              value={editActual}
-                              onChange={(e) => setEditActual(e.target.value)}
-                              onFocus={(e) => e.target.select()}
-                              onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
-                              className="w-20 text-right text-sm font-bold bg-rose-50 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-rose-200"
-                              placeholder="0"
-                            />
-                            <div className="flex gap-1">
-                              <button onClick={saveEdit} className="w-6 h-6 flex items-center justify-center rounded-full bg-emerald-100 text-emerald-600"><Check className="w-3 h-3" /></button>
-                              <button onClick={() => setEditingItemId(null)} className="w-6 h-6 flex items-center justify-center rounded-full bg-zinc-100 text-zinc-500"><X className="w-3 h-3" /></button>
+                          <div className="p-3 space-y-2">
+                            {/* Name + group row */}
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                                onFocus={(e) => e.target.select()}
+                                onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
+                                className="flex-1 text-sm font-bold bg-zinc-50 rounded-lg px-3 py-1.5 outline-none focus:ring-2 focus:ring-zinc-200"
+                                placeholder="Item name"
+                              />
+                              <select
+                                value={editGroup}
+                                onChange={(e) => setEditGroup(e.target.value)}
+                                className="w-32 text-xs font-medium bg-zinc-50 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-zinc-200 appearance-none"
+                              >
+                                {GROUP_ORDER.map((g) => <option key={g} value={g}>{g}</option>)}
+                              </select>
                             </div>
-                          </>
+                            {/* Planned + actual + actions row */}
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="number"
+                                value={editPlanned}
+                                onChange={(e) => setEditPlanned(e.target.value)}
+                                onFocus={(e) => e.target.select()}
+                                onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
+                                className="flex-1 w-0 text-right text-sm font-bold bg-emerald-50 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-emerald-200"
+                                placeholder="Budget"
+                              />
+                              <input
+                                type="number"
+                                value={editActual}
+                                onChange={(e) => setEditActual(e.target.value)}
+                                onFocus={(e) => e.target.select()}
+                                onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
+                                className="flex-1 w-0 text-right text-sm font-bold bg-rose-50 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-rose-200"
+                                placeholder="Actual"
+                              />
+                              <button onClick={saveEdit} className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-full bg-emerald-100 text-emerald-600"><Check className="w-3.5 h-3.5" /></button>
+                              <button onClick={() => setEditingItemId(null)} className="w-7 h-7 flex-shrink-0 flex items-center justify-center rounded-full bg-zinc-100 text-zinc-500"><X className="w-3.5 h-3.5" /></button>
+                            </div>
+                          </div>
                         ) : (
-                          <>
+                          <div className="flex items-center gap-2 px-4 py-3">
                             <span className="flex-1 text-sm font-medium truncate">{item.name}</span>
                             <span className="w-20 text-right text-sm font-bold text-zinc-400">${item.planned.toLocaleString()}</span>
                             <span className={`w-20 text-right text-sm font-bold ${item.actual > item.planned && item.planned > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
@@ -596,7 +1022,7 @@ export default function App() {
                               <button onClick={() => startEdit(item)} className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-zinc-100 text-zinc-400"><PenLine className="w-3 h-3" /></button>
                               <button onClick={() => setConfirmDeleteId(item.id)} className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-red-50 text-zinc-300 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
                             </div>
-                          </>
+                          </div>
                         )}
                       </div>
                     ))}
@@ -635,7 +1061,7 @@ export default function App() {
               <h2 className="text-lg font-bold">{monthLabel} Transactions</h2>
               <div className="space-y-3">
                 {monthlyTransactions.map((tx) => (
-                  <TxRow key={tx.id} tx={tx} onDelete={deleteTransaction} showDelete />
+                  <TxRow key={tx.id} tx={tx} onDelete={deleteTransaction} showDelete personNames={personNames} />
                 ))}
                 {monthlyTransactions.length === 0 && (
                   <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-zinc-200">
@@ -751,6 +1177,83 @@ export default function App() {
         </div>
       )}
 
+      {/* Bill Delete Confirmation Modal */}
+      {confirmBillDeleteId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setConfirmBillDeleteId(null)} />
+          <div className="relative bg-white rounded-3xl shadow-xl p-6 w-full max-w-sm space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-red-100 rounded-xl text-red-600"><Trash2 className="w-5 h-5" /></div>
+              <div>
+                <p className="text-sm font-bold text-zinc-900">Delete bill?</p>
+                <p className="text-xs text-zinc-500">This cannot be undone.</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmBillDeleteId(null)}
+                className="flex-1 h-11 rounded-2xl bg-zinc-100 text-zinc-700 text-sm font-bold hover:bg-zinc-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => { await deleteBill(confirmBillDeleteId); setConfirmBillDeleteId(null); }}
+                className="flex-1 h-11 rounded-2xl bg-red-600 text-white text-sm font-bold hover:bg-red-700 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Variable Bill Amount Modal */}
+      {variableBillId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setVariableBillId(null)} />
+          <div className="relative bg-white rounded-3xl shadow-xl p-6 w-full max-w-sm space-y-4">
+            <div>
+              <p className="text-sm font-bold text-zinc-900">Enter actual amount</p>
+              <p className="text-xs text-zinc-500 mt-0.5">Variable bill — confirm how much you paid.</p>
+            </div>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 font-bold">$</span>
+              <input
+                type="number"
+                value={variableAmount}
+                onChange={(e) => setVariableAmount(e.target.value)}
+                onFocus={(e) => e.target.select()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    toggleBillPaid(variableBillId, activeMonth, parseFloat(variableAmount) || 0);
+                    setVariableBillId(null);
+                  }
+                }}
+                className="w-full pl-8 h-12 rounded-xl bg-zinc-50 border border-zinc-200 text-lg font-bold focus:outline-none focus:ring-2 focus:ring-zinc-300"
+                autoFocus
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setVariableBillId(null)}
+                className="flex-1 h-11 rounded-2xl bg-zinc-100 text-zinc-700 text-sm font-bold hover:bg-zinc-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  toggleBillPaid(variableBillId, activeMonth, parseFloat(variableAmount) || 0);
+                  setVariableBillId(null);
+                }}
+                className="flex-1 h-11 rounded-2xl bg-zinc-900 text-white text-sm font-bold hover:bg-zinc-800 transition-colors"
+              >
+                Mark Paid
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Settings Drawer */}
       <Drawer open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
         <DrawerContent className="max-w-md mx-auto">
@@ -759,22 +1262,35 @@ export default function App() {
             <div>
               <p className="text-xs font-bold uppercase tracking-wider text-zinc-500 mb-3">Budget Tab Names</p>
               <div className="space-y-3">
-                {PERSON_IDS.map((pid, i) => (
-                  <div key={pid} className="space-y-1">
-                    <Label className="text-xs text-zinc-400">Tab {i + 1}</Label>
+                {editNames.map((name, i) => (
+                  <div key={i} className="flex items-center gap-2">
                     <Input
-                      value={editNames[i] ?? ''}
+                      value={name}
                       onChange={(e) => {
                         const next = [...editNames];
                         next[i] = e.target.value;
                         setEditNames(next);
                       }}
-                      className="h-12 rounded-xl bg-zinc-50 border-none"
+                      className="h-12 rounded-xl bg-zinc-50 border-none flex-1"
                       placeholder={`Person ${i + 1}`}
                     />
+                    {editNames.length > 1 && (
+                      <button
+                        onClick={() => setEditNames(editNames.filter((_, j) => j !== i))}
+                        className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-red-50 text-zinc-300 hover:text-red-400 transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
+              <button
+                onClick={() => setEditNames([...editNames, ''])}
+                className="mt-3 w-full h-10 rounded-xl border-2 border-dashed border-zinc-200 text-xs font-bold text-zinc-400 hover:border-zinc-400 hover:text-zinc-600 transition-colors"
+              >
+                + Add Person
+              </button>
             </div>
             <Button className="w-full h-12 rounded-2xl bg-zinc-900 text-white font-bold" onClick={saveSettings}>
               Save Changes
@@ -827,6 +1343,20 @@ export default function App() {
                 <Input type="date" className="h-12 rounded-xl bg-zinc-50 border-none"
                   value={newTx.date} onChange={(e) => setNewTx({ ...newTx, date: e.target.value })} />
               </div>
+
+              <div className="space-y-2">
+                <Label className="text-xs font-bold uppercase tracking-wider text-zinc-500">Who</Label>
+                <select
+                  value={newTx.person}
+                  onChange={(e) => setNewTx({ ...newTx, person: e.target.value })}
+                  className="w-full h-12 rounded-xl bg-zinc-50 border-none px-4 text-sm font-medium text-zinc-900 appearance-none focus:outline-none focus:ring-2 focus:ring-zinc-200"
+                >
+                  {personNames.map((name, i) => (
+                    <option key={`p${i}`} value={`p${i}`}>{name}</option>
+                  ))}
+                  <option value="both">Both</option>
+                </select>
+              </div>
             </div>
             {txError && <p className="text-xs text-red-500 font-medium text-center">{txError}</p>}
             <Button className="w-full h-14 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-white font-bold text-lg disabled:opacity-50"
@@ -842,7 +1372,7 @@ export default function App() {
         <div className="max-w-md mx-auto flex items-center justify-between">
           <NavButton active={activeTab === 'dashboard'}    onClick={() => setActiveTab('dashboard')}    icon={<LayoutDashboard className="w-5 h-5" />} label="Home" />
           <NavButton active={activeTab === 'income'}       onClick={() => setActiveTab('income')}       icon={<TrendingUp className="w-5 h-5" />}      label="Income" />
-          <div className="w-14" />
+          <NavButton active={activeTab === 'expenses'}     onClick={() => setActiveTab('expenses')}     icon={<TrendingDown className="w-5 h-5" />}    label="Bills" />
           <NavButton active={activeTab === 'budget'}       onClick={() => setActiveTab('budget')}       icon={<BarChart2 className="w-5 h-5" />}       label="Budget" />
           <NavButton active={activeTab === 'transactions'} onClick={() => setActiveTab('transactions')} icon={<History className="w-5 h-5" />}         label="History" />
         </div>
@@ -855,11 +1385,19 @@ function TxRow({
   tx,
   onDelete,
   showDelete = true,
+  personNames = [],
 }: {
-  tx: { id: string; type: string; description: string; date: string; amount: number };
+  tx: { id: string; type: string; description: string; date: string; amount: number; person?: string };
   onDelete: (id: string) => void;
   showDelete?: boolean;
+  personNames?: string[];
 }) {
+  const personLabel = tx.person
+    ? tx.person === 'both'
+      ? 'Both'
+      : personNames[parseInt(tx.person.replace('p', ''))] ?? tx.person
+    : null;
+
   return (
     <div className="flex items-center justify-between p-4 bg-white rounded-2xl shadow-sm">
       <div className="flex items-center gap-3">
@@ -868,7 +1406,15 @@ function TxRow({
         </div>
         <div>
           <p className="text-sm font-bold">{tx.description}</p>
-          <p className="text-[10px] text-zinc-500 font-medium">{format(new Date(tx.date + 'T12:00:00'), 'MMM dd, yyyy')}</p>
+          <div className="flex items-center gap-1.5">
+            <p className="text-[10px] text-zinc-500 font-medium">{format(new Date(tx.date + 'T12:00:00'), 'MMM dd, yyyy')}</p>
+            {personLabel && (
+              <>
+                <span className="w-1 h-1 rounded-full bg-zinc-300 inline-block" />
+                <span className="text-[10px] font-bold text-zinc-400">{personLabel}</span>
+              </>
+            )}
+          </div>
         </div>
       </div>
       <div className="flex items-center gap-2">

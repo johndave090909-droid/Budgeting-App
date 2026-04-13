@@ -13,7 +13,7 @@ import {
   orderBy,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Transaction, Goal, BudgetItem } from '../types';
+import { Transaction, Goal, BudgetItem, Bill } from '../types';
 import { format } from 'date-fns';
 
 const DEFAULT_BUDGET_TEMPLATE = [
@@ -34,13 +34,15 @@ const DEFAULT_BUDGET_TEMPLATE = [
 
 const GROUP_ORDER = ['Paying The Lord', 'Food and Hygiene', 'Savings and Others', 'Recreation'];
 
-export const PERSON_IDS = ['p0', 'p1'] as const;
-export type PersonId = typeof PERSON_IDS[number];
+// Derives stable person IDs from the count of persons in settings
+export const getPersonIds = (count: number): string[] =>
+  Array.from({ length: count }, (_, i) => `p${i}`);
 
 export function useBudget() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [goals, setGoals]               = useState<Goal[]>([]);
   const [budgetItems, setBudgetItems]   = useState<BudgetItem[]>([]);
+  const [bills, setBills]               = useState<Bill[]>([]);
   const [personNames, setPersonNames]   = useState<string[]>(['Dave', 'Jovy']);
 
   // Deduplication guard: tracks in-flight seed operations
@@ -71,6 +73,13 @@ export function useBudget() {
       });
       setBudgetItems(data);
     });
+  }, []);
+
+  // ── Bills ────────────────────────────────────────────────────────
+  useEffect(() => {
+    return onSnapshot(collection(db, 'bills'), (snap) =>
+      setBills(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Bill)))
+    );
   }, []);
 
   // ── Settings (person names) ──────────────────────────────────────
@@ -151,15 +160,36 @@ export function useBudget() {
   const deleteGoal = (id: string) => deleteDoc(doc(db, 'goals', id));
 
   // ── Budget item CRUD ─────────────────────────────────────────────
-  const updateBudgetItem = (id: string, planned: number, actual: number) =>
-    updateDoc(doc(db, 'budgetItems', id), { planned, actual });
+  const updateBudgetItem = (
+    id: string,
+    fields: { planned: number; actual: number; name?: string; group?: string }
+  ) => updateDoc(doc(db, 'budgetItems', id), fields as Record<string, unknown>);
   const addBudgetItem    = (item: Omit<BudgetItem, 'id'>) => addDoc(collection(db, 'budgetItems'), item);
   const deleteBudgetItem = (id: string) => deleteDoc(doc(db, 'budgetItems', id));
+
+  // ── Bill CRUD ────────────────────────────────────────────────────
+  const addBill    = (bill: Omit<Bill, 'id'>) => addDoc(collection(db, 'bills'), bill);
+  const deleteBill = (id: string) => deleteDoc(doc(db, 'bills', id));
+  const updateBill = (id: string, fields: Partial<Omit<Bill, 'id'>>) =>
+    updateDoc(doc(db, 'bills', id), fields as Record<string, unknown>);
+
+  const toggleBillPaid = async (billId: string, month: string, amount?: number) => {
+    const bill = bills.find((b) => b.id === billId);
+    if (!bill) return;
+    const paidAmounts = { ...(bill.paidAmounts ?? {}) };
+    if (paidAmounts[month] !== undefined) {
+      delete paidAmounts[month];
+    } else {
+      paidAmounts[month] = amount ?? bill.amount;
+    }
+    await updateDoc(doc(db, 'bills', billId), { paidAmounts });
+  };
 
   return {
     transactions,
     goals,
     budgetItems,
+    bills,
     personNames,
     updatePersonNames,
     seedMonthBudgetItems,
@@ -171,5 +201,9 @@ export function useBudget() {
     updateBudgetItem,
     addBudgetItem,
     deleteBudgetItem,
+    addBill,
+    deleteBill,
+    updateBill,
+    toggleBillPaid,
   };
 }
