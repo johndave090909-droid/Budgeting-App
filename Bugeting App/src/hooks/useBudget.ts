@@ -150,6 +150,8 @@ export function useBudget() {
   // ── Transaction CRUD ─────────────────────────────────────────────
   const addTransaction    = (t: Omit<Transaction, 'id'>) => addDoc(collection(db, 'transactions'), t);
   const deleteTransaction = (id: string) => deleteDoc(doc(db, 'transactions', id));
+  const updateTransaction = (id: string, fields: Partial<Omit<Transaction, 'id'>>) =>
+    updateDoc(doc(db, 'transactions', id), fields as Record<string, unknown>);
 
   // ── Goal CRUD ────────────────────────────────────────────────────
   const addGoal    = (goal: Omit<Goal, 'id'>) => addDoc(collection(db, 'goals'), goal);
@@ -173,16 +175,19 @@ export function useBudget() {
   const updateBill = (id: string, fields: Partial<Omit<Bill, 'id'>>) =>
     updateDoc(doc(db, 'bills', id), fields as Record<string, unknown>);
 
-  const toggleBillPaid = async (billId: string, month: string, amount?: number) => {
+  const toggleBillPaid = async (billId: string, month: string, amount?: number, salaryIdx?: number) => {
     const bill = bills.find((b) => b.id === billId);
     if (!bill) return;
     const paidAmounts = { ...(bill.paidAmounts ?? {}) };
+    const paidSalary  = { ...(bill.paidSalary  ?? {}) };
     if (paidAmounts[month] !== undefined) {
       delete paidAmounts[month];
+      delete paidSalary[month];
     } else {
-      paidAmounts[month] = amount ?? bill.amount;
+      paidAmounts[month] = Number(amount ?? bill.amount) || 0;
+      if (salaryIdx !== undefined) paidSalary[month] = salaryIdx;
     }
-    await updateDoc(doc(db, 'bills', billId), { paidAmounts });
+    await updateDoc(doc(db, 'bills', billId), { paidAmounts, paidSalary });
   };
 
   return {
@@ -195,6 +200,7 @@ export function useBudget() {
     seedMonthBudgetItems,
     addTransaction,
     deleteTransaction,
+    updateTransaction,
     addGoal,
     updateGoal,
     deleteGoal,

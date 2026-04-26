@@ -68,6 +68,7 @@ export default function App() {
     seedMonthBudgetItems,
     addTransaction,
     deleteTransaction,
+    updateTransaction,
     addGoal,
     updateGoal,
     deleteGoal,
@@ -132,7 +133,7 @@ export default function App() {
     const billContrib = bills.reduce((acc, b) => {
       const pastPaid = Object.entries(b.paidAmounts ?? {})
         .filter(([m]) => m < activeMonth)
-        .reduce((s, [, v]) => s + v, 0);
+        .reduce((s, [, v]) => s + (Number(v) || 0), 0);
       return acc - pastPaid;
     }, 0);
 
@@ -144,9 +145,30 @@ export default function App() {
     [transactions, activeMonth]
   );
 
+  const [activeSalaryIdx, setActiveSalaryIdx] = useState(0);
+
+  useEffect(() => { setActiveSalaryIdx(0); }, [activePerson, activeMonth]);
+
+  // When switching to a salary tab that has no items yet, seed it from salary 0
+  useEffect(() => {
+    if (activeSalaryIdx === 0) return;
+    const hasItems = budgetItems.some(
+      (b) => b.month === activeMonth && (b.person ?? 'p0') === activePerson && (b.salaryIdx ?? 0) === activeSalaryIdx
+    );
+    if (hasItems) return;
+    const salary0Items = budgetItems.filter(
+      (b) => b.month === activeMonth && (b.person ?? 'p0') === activePerson && (b.salaryIdx ?? 0) === 0
+    );
+    salary0Items.forEach((b) => {
+      addBudgetItem({ group: b.group, name: b.name, planned: 0, actual: 0, month: activeMonth, person: activePerson, salaryIdx: activeSalaryIdx });
+    });
+  }, [activeSalaryIdx, activeMonth, activePerson]);
+
   const monthlyBudgetItems = useMemo(
-    () => budgetItems.filter((b) => b.month === activeMonth && (b.person ?? 'p0') === activePerson),
-    [budgetItems, activeMonth, activePerson]
+    () => budgetItems.filter(
+      (b) => b.month === activeMonth && (b.person ?? 'p0') === activePerson && (b.salaryIdx ?? 0) === activeSalaryIdx
+    ),
+    [budgetItems, activeMonth, activePerson, activeSalaryIdx]
   );
 
   const monthlyTotals = useMemo(
@@ -182,7 +204,7 @@ export default function App() {
   );
 
   const monthlyBillPayments = useMemo(
-    () => bills.reduce((s, b) => s + (b.paidAmounts?.[activeMonth] ?? 0), 0),
+    () => bills.reduce((s, b) => s + (Number(b.paidAmounts?.[activeMonth]) || 0), 0),
     [bills, activeMonth]
   );
 
@@ -195,10 +217,10 @@ export default function App() {
     monthlyBillPayments;
 
   // ── Expense (bills) tab state ────────────────────────────────────
-  const [isAddBillOpen, setIsAddBillOpen]         = useState(false);
+  const [isAddBillOpen, setIsAddBillOpen]             = useState(false);
   const [confirmBillDeleteId, setConfirmBillDeleteId] = useState<string | null>(null);
-  const [variableBillId, setVariableBillId]       = useState<string | null>(null);
-  const [variableAmount, setVariableAmount]       = useState('');
+  const [payingBill, setPayingBill] = useState<{ bill: Bill; amount: string } | null>(null);
+  const [payingSalaryIdx, setPayingSalaryIdx]         = useState(0);
   const [newBill, setNewBill] = useState({
     name: '',
     amount: '',
@@ -224,16 +246,22 @@ export default function App() {
   const handleCheckBill = (bill: Bill) => {
     const isPaid = bill.paidAmounts?.[activeMonth] !== undefined;
     if (isPaid) {
-      // Uncheck — remove the payment
       toggleBillPaid(bill.id, activeMonth);
-    } else if (bill.type === 'variable') {
-      // Variable — ask for actual amount
-      setVariableAmount(String(bill.amount));
-      setVariableBillId(bill.id);
     } else {
-      // Fixed — use default amount
-      toggleBillPaid(bill.id, activeMonth);
+      setPayingSalaryIdx(0);
+      setPayingBill({ bill, amount: String(bill.amount) });
     }
+  };
+
+  const confirmPayBill = async () => {
+    if (!payingBill) return;
+    await toggleBillPaid(
+      payingBill.bill.id,
+      activeMonth,
+      parseFloat(payingBill.amount) || 0,
+      payingSalaryIdx,
+    );
+    setPayingBill(null);
   };
 
   // Sort bills by due day
@@ -243,9 +271,11 @@ export default function App() {
   );
 
   const billTotals = useMemo(() => {
-    const total = bills.reduce((s, b) => s + b.amount, 0);
-    const paid  = bills.reduce((s, b) => s + (b.paidAmounts?.[activeMonth] ?? 0), 0);
-    return { total, paid, remaining: total - paid };
+    const paid      = bills.reduce((s, b) => s + (Number(b.paidAmounts?.[activeMonth]) || 0), 0);
+    const remaining = bills
+      .filter((b) => b.paidAmounts?.[activeMonth] === undefined)
+      .reduce((s, b) => s + (Number(b.amount) || 0), 0);
+    return { paid, remaining };
   }, [bills, activeMonth]);
 
   // ── Add transaction ──────────────────────────────────────────────
@@ -367,7 +397,12 @@ export default function App() {
 
   const handleAddBudgetItem = async () => {
     if (!newBudgetName || !newBudgetGroup) return;
-    await addBudgetItem({ group: newBudgetGroup, name: newBudgetName, planned: 0, actual: 0, month: activeMonth, person: activePerson });
+    const salaryCount = Math.max(1, monthlyTransactions.filter(
+      (t) => t.type === 'income' && (t.person === activePerson || t.person === 'both')
+    ).length);
+    for (let i = 0; i < salaryCount; i++) {
+      await addBudgetItem({ group: newBudgetGroup, name: newBudgetName, planned: 0, actual: 0, month: activeMonth, person: activePerson, salaryIdx: i });
+    }
     setNewBudgetName('');
     setNewBudgetGroup('');
     setIsAddBudgetOpen(false);
@@ -426,9 +461,14 @@ export default function App() {
             <div className="flex items-center gap-3">
               <div className="text-right">
                 <p className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500">Running Balance</p>
-                <p className={`text-sm font-bold ${endingBalance >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                  ${endingBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                </p>
+                {(() => {
+                  const runningBalance = monthlyTotals.income - monthlyBudgetActual;
+                  return (
+                    <p className={`text-sm font-bold ${runningBalance >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                      ${runningBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    </p>
+                  );
+                })()}
               </div>
               <button onClick={openSettings} className="p-2 rounded-xl hover:bg-zinc-100 transition-colors text-zinc-400 hover:text-zinc-700">
                 <Settings className="w-5 h-5" />
@@ -589,7 +629,7 @@ export default function App() {
 
               <div className="space-y-3">
                 {filteredIncome.map((tx) => (
-                  <TxRow key={tx.id} tx={tx} onDelete={deleteTransaction} personNames={personNames} />
+                  <TxRow key={tx.id} tx={tx} onDelete={deleteTransaction} onUpdate={(id, fields) => updateTransaction(id, fields)} personNames={personNames} />
                 ))}
                 {filteredIncome.length === 0 && (
                   <div className="text-center py-12 bg-white rounded-3xl border border-dashed border-zinc-200">
@@ -683,11 +723,7 @@ export default function App() {
               </div>
 
               {/* Summary cards */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="bg-white rounded-2xl p-3 shadow-sm text-center">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Total</p>
-                  <p className="text-sm font-bold text-zinc-900">${billTotals.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
-                </div>
+              <div className="grid grid-cols-2 gap-3">
                 <div className="bg-emerald-50 rounded-2xl p-3 shadow-sm text-center">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-500">Paid</p>
                   <p className="text-sm font-bold text-emerald-700">${billTotals.paid.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
@@ -702,7 +738,7 @@ export default function App() {
               <div className="space-y-2">
                 {sortedBills.map((bill) => {
                   const isPaid    = bill.paidAmounts?.[activeMonth] !== undefined;
-                  const paidAmt   = bill.paidAmounts?.[activeMonth] ?? 0;
+                  const paidAmt   = Number(bill.paidAmounts?.[activeMonth]) || 0;
                   const personLabel = bill.person === 'both'
                     ? 'Both'
                     : bill.person
@@ -838,7 +874,19 @@ export default function App() {
                           {/* Amount */}
                           <div className="text-right">
                             {isPaid ? (
-                              <p className="text-sm font-bold text-emerald-600">${paidAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                              <>
+                                <p className="text-sm font-bold text-emerald-600">${paidAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                                {bill.paidSalary?.[activeMonth] !== undefined && (() => {
+                                  const allIncome = monthlyTransactions.filter((t) => t.type === 'income');
+                                  const idx = bill.paidSalary[activeMonth];
+                                  const tx = allIncome[idx];
+                                  if (!tx) return null;
+                                  const pid = tx.person && tx.person !== 'both' ? tx.person : 'p0';
+                                  const name = personNames[parseInt(pid.replace('p', ''))] ?? pid;
+                                  const perPersonIdx = allIncome.slice(0, idx + 1).filter((t) => (t.person && t.person !== 'both' ? t.person : 'p0') === pid).length;
+                                  return <p className="text-[10px] text-emerald-500 font-medium">{name} · Salary {perPersonIdx}</p>;
+                                })()}
+                              </>
                             ) : (
                               <p className="text-sm font-bold text-zinc-900">${bill.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
                             )}
@@ -944,19 +992,67 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Person's income for this month */}
+              {/* Salary tabs + remaining balance */}
               {(() => {
-                const personIncome = monthlyTransactions
-                  .filter((t) => t.type === 'income' && (t.person === activePerson || t.person === 'both'))
-                  .reduce((s, t) => s + t.amount, 0);
-                const personName = personNames[personIds.indexOf(activePerson)] ?? activePerson;
+                const salaries = monthlyTransactions.filter(
+                  (t) => t.type === 'income' && (t.person === activePerson || t.person === 'both')
+                );
+                const currentSalaryAmount = salaries[activeSalaryIdx]?.amount ?? 0;
+                const salaryBillPayments = bills
+                  .filter((b) => b.paidSalary?.[activeMonth] === activeSalaryIdx)
+                  .reduce((s, b) => s + (Number(b.paidAmounts?.[activeMonth]) || 0), 0);
+                const remaining = currentSalaryAmount - budgetTotals.actual - salaryBillPayments;
                 return (
-                  <div className="flex items-center justify-between bg-emerald-50 rounded-xl px-4 py-2.5">
-                    <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">{personName}'s Income</span>
-                    <span className="text-sm font-bold text-emerald-600">
-                      ${personIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
+                  <>
+                    {salaries.length > 0 && (
+                      <div className="flex gap-1 bg-zinc-100 rounded-xl p-1">
+                        {salaries.map((t, i) => (
+                          <button
+                            key={t.id}
+                            onClick={() => setActiveSalaryIdx(i)}
+                            className={`flex-1 text-xs font-bold py-1.5 rounded-lg transition-colors ${
+                              activeSalaryIdx === i
+                                ? 'bg-white text-emerald-600 shadow-sm'
+                                : 'text-zinc-400 hover:text-zinc-600'
+                            }`}
+                          >
+                            Salary {i + 1}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between bg-emerald-50 rounded-xl px-4 py-2.5">
+                      <div>
+                        <p className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Remaining Balance</p>
+                        {salaries.length > 0 && (
+                          <p className="text-xs text-emerald-500 mt-0.5">
+                            ${currentSalaryAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} salary
+                          </p>
+                        )}
+                      </div>
+                      <span className={`text-sm font-bold ${remaining < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                        ${remaining.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    {salaries.length > 1 && (() => {
+                      const totalIncome = salaries.reduce((s, t) => s + t.amount, 0);
+                      const totalActual = budgetItems
+                        .filter((b) => b.month === activeMonth && (b.person ?? 'p0') === activePerson)
+                        .reduce((s, b) => s + b.actual, 0);
+                      const totalBillPayments = bills
+                        .filter((b) => b.paidSalary?.[activeMonth] !== undefined)
+                        .reduce((s, b) => s + (Number(b.paidAmounts?.[activeMonth]) || 0), 0);
+                      const totalRemaining = totalIncome - totalActual - totalBillPayments;
+                      return (
+                        <div className="flex items-center justify-between bg-emerald-100 rounded-xl px-4 py-2.5">
+                          <p className="text-xs font-bold text-emerald-700 uppercase tracking-wider">Total Remaining (All Salaries)</p>
+                          <span className={`text-sm font-bold ${totalRemaining < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                            ${totalRemaining.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                  </>
                 );
               })()}
 
@@ -1167,7 +1263,19 @@ export default function App() {
                 Cancel
               </button>
               <button
-                onClick={async () => { await deleteBudgetItem(confirmDeleteId); setConfirmDeleteId(null); }}
+                onClick={async () => {
+                  const item = budgetItems.find((b) => b.id === confirmDeleteId);
+                  if (item) {
+                    const siblings = budgetItems.filter((b) =>
+                      b.name === item.name && b.group === item.group &&
+                      b.month === item.month && (b.person ?? 'p0') === (item.person ?? 'p0')
+                    );
+                    await Promise.all(siblings.map((b) => deleteBudgetItem(b.id)));
+                  } else {
+                    await deleteBudgetItem(confirmDeleteId);
+                  }
+                  setConfirmDeleteId(null);
+                }}
                 className="flex-1 h-11 rounded-2xl bg-red-600 text-white text-sm font-bold hover:bg-red-700 transition-colors"
               >
                 Delete
@@ -1207,52 +1315,97 @@ export default function App() {
         </div>
       )}
 
-      {/* Variable Bill Amount Modal */}
-      {variableBillId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setVariableBillId(null)} />
-          <div className="relative bg-white rounded-3xl shadow-xl p-6 w-full max-w-sm space-y-4">
-            <div>
-              <p className="text-sm font-bold text-zinc-900">Enter actual amount</p>
-              <p className="text-xs text-zinc-500 mt-0.5">Variable bill — confirm how much you paid.</p>
-            </div>
-            <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 font-bold">$</span>
-              <input
-                type="number"
-                value={variableAmount}
-                onChange={(e) => setVariableAmount(e.target.value)}
-                onFocus={(e) => e.target.select()}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    toggleBillPaid(variableBillId, activeMonth, parseFloat(variableAmount) || 0);
-                    setVariableBillId(null);
-                  }
-                }}
-                className="w-full pl-8 h-12 rounded-xl bg-zinc-50 border border-zinc-200 text-lg font-bold focus:outline-none focus:ring-2 focus:ring-zinc-300"
-                autoFocus
-              />
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setVariableBillId(null)}
-                className="flex-1 h-11 rounded-2xl bg-zinc-100 text-zinc-700 text-sm font-bold hover:bg-zinc-200 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  toggleBillPaid(variableBillId, activeMonth, parseFloat(variableAmount) || 0);
-                  setVariableBillId(null);
-                }}
-                className="flex-1 h-11 rounded-2xl bg-zinc-900 text-white text-sm font-bold hover:bg-zinc-800 transition-colors"
-              >
-                Mark Paid
-              </button>
+      {/* Pay Bill Modal */}
+      {payingBill && (() => {
+        // Build a flat list of all salaries grouped by person, with per-person index
+        const allSalaries = monthlyTransactions
+          .filter((t) => t.type === 'income')
+          .map((t) => {
+            const pid = t.person && t.person !== 'both' ? t.person : 'p0';
+            const name = personNames[parseInt(pid.replace('p', ''))] ?? pid;
+            return { tx: t, personName: name, pid };
+          });
+        // Count how many salaries each person has seen so far to get per-person index
+        const personCount: Record<string, number> = {};
+        const salaryEntries = allSalaries.map((s, i) => {
+          personCount[s.pid] = (personCount[s.pid] ?? 0) + 1;
+          return { ...s, globalIdx: i, perPersonIdx: personCount[s.pid] };
+        });
+
+        // Group by person for display
+        const grouped: Record<string, typeof salaryEntries> = {};
+        salaryEntries.forEach((s) => {
+          if (!grouped[s.pid]) grouped[s.pid] = [];
+          grouped[s.pid].push(s);
+        });
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
+            <div className="absolute inset-0 bg-black/40" onClick={() => setPayingBill(null)} />
+            <div className="relative bg-white rounded-3xl shadow-xl p-6 w-full max-w-sm space-y-4">
+              <div>
+                <p className="text-sm font-bold text-zinc-900">Mark as Paid — {payingBill.bill.name}</p>
+                <p className="text-xs text-zinc-500 mt-0.5">Choose which salary covers this bill.</p>
+              </div>
+
+              {/* Amount (editable for variable, locked for fixed) */}
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 font-bold">$</span>
+                <input
+                  type="number"
+                  value={payingBill.amount}
+                  onChange={(e) => setPayingBill({ ...payingBill, amount: e.target.value })}
+                  onFocus={(e) => e.target.select()}
+                  readOnly={payingBill.bill.type === 'fixed'}
+                  className={`w-full pl-8 h-12 rounded-xl border text-lg font-bold focus:outline-none focus:ring-2 focus:ring-zinc-300 ${
+                    payingBill.bill.type === 'fixed' ? 'bg-zinc-100 border-zinc-100 text-zinc-500' : 'bg-zinc-50 border-zinc-200'
+                  }`}
+                  autoFocus={payingBill.bill.type === 'variable'}
+                />
+              </div>
+
+              {/* Salary selector grouped by person */}
+              {salaryEntries.length > 0 && (
+                <div className="space-y-3">
+                  <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">Deduct from</p>
+                  {Object.entries(grouped).map(([pid, entries]) => (
+                    <div key={pid} className="space-y-1.5">
+                      <p className="text-xs font-bold text-zinc-500">{entries[0].personName}</p>
+                      <div className="flex gap-2">
+                        {entries.map((s) => (
+                          <button
+                            key={s.tx.id}
+                            onClick={() => setPayingSalaryIdx(s.globalIdx)}
+                            className={`flex-1 py-2.5 rounded-xl text-sm font-bold border-2 transition-colors ${
+                              payingSalaryIdx === s.globalIdx
+                                ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                                : 'border-zinc-200 text-zinc-400 hover:border-zinc-300'
+                            }`}
+                          >
+                            Salary {s.perPersonIdx}
+                            <span className="block text-xs font-medium mt-0.5">
+                              ${s.tx.amount.toLocaleString()}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button onClick={() => setPayingBill(null)} className="flex-1 h-11 rounded-2xl bg-zinc-100 text-zinc-700 text-sm font-bold">
+                  Cancel
+                </button>
+                <button onClick={confirmPayBill} className="flex-1 h-11 rounded-2xl bg-zinc-900 text-white text-sm font-bold">
+                  Mark Paid
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Settings Drawer */}
       <Drawer open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
@@ -1384,19 +1537,98 @@ export default function App() {
 function TxRow({
   tx,
   onDelete,
+  onUpdate,
   showDelete = true,
   personNames = [],
 }: {
   tx: { id: string; type: string; description: string; date: string; amount: number; person?: string };
   onDelete: (id: string) => void;
+  onUpdate?: (id: string, fields: { description: string; amount: number; date: string; person?: string }) => void;
   showDelete?: boolean;
   personNames?: string[];
 }) {
+  const [editing, setEditing] = React.useState(false);
+  const [editDesc, setEditDesc] = React.useState('');
+  const [editAmount, setEditAmount] = React.useState('');
+  const [editDate, setEditDate] = React.useState('');
+  const [editPerson, setEditPerson] = React.useState('');
+
+  const startEdit = () => {
+    setEditDesc(tx.description);
+    setEditAmount(String(tx.amount));
+    setEditDate(tx.date);
+    setEditPerson(tx.person ?? '');
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    if (!onUpdate) return;
+    await onUpdate(tx.id, {
+      description: editDesc.trim() || tx.description,
+      amount: parseFloat(editAmount) || tx.amount,
+      date: editDate,
+      person: editPerson || undefined,
+    });
+    setEditing(false);
+  };
+
   const personLabel = tx.person
     ? tx.person === 'both'
       ? 'Both'
       : personNames[parseInt(tx.person.replace('p', ''))] ?? tx.person
     : null;
+
+  if (editing) {
+    return (
+      <div className="p-4 bg-white rounded-2xl shadow-sm space-y-3">
+        <input
+          type="text"
+          value={editDesc}
+          onChange={(e) => setEditDesc(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
+          className="w-full text-sm font-bold bg-zinc-50 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-zinc-200"
+          placeholder="Description"
+          autoFocus
+        />
+        <div className="flex gap-2">
+          <input
+            type="number"
+            value={editAmount}
+            onChange={(e) => setEditAmount(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
+            className="flex-1 text-sm font-bold bg-emerald-50 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-200"
+            placeholder="Amount"
+          />
+          <input
+            type="date"
+            value={editDate}
+            onChange={(e) => setEditDate(e.target.value)}
+            className="flex-1 text-sm bg-zinc-50 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-zinc-200"
+          />
+        </div>
+        {personNames.length > 0 && (
+          <select
+            value={editPerson}
+            onChange={(e) => setEditPerson(e.target.value)}
+            className="w-full text-sm bg-zinc-50 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-zinc-200 appearance-none"
+          >
+            {personNames.map((name, i) => (
+              <option key={i} value={`p${i}`}>{name}</option>
+            ))}
+            <option value="both">Both</option>
+          </select>
+        )}
+        <div className="flex gap-2">
+          <button onClick={saveEdit} className="flex-1 h-9 rounded-xl bg-emerald-600 text-white text-xs font-bold flex items-center justify-center gap-1">
+            <Check className="w-3.5 h-3.5" /> Save
+          </button>
+          <button onClick={() => setEditing(false)} className="flex-1 h-9 rounded-xl bg-zinc-100 text-zinc-600 text-xs font-bold flex items-center justify-center gap-1">
+            <X className="w-3.5 h-3.5" /> Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center justify-between p-4 bg-white rounded-2xl shadow-sm">
@@ -1421,6 +1653,11 @@ function TxRow({
         <p className={`text-sm font-bold ${tx.type === 'income' ? 'text-emerald-600' : tx.type === 'expense' ? 'text-rose-600' : 'text-amber-600'}`}>
           {tx.type === 'expense' ? '−' : '+'}${tx.amount.toLocaleString()}
         </p>
+        {onUpdate && (
+          <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-300 hover:text-zinc-600" onClick={startEdit}>
+            <PenLine className="w-4 h-4" />
+          </Button>
+        )}
         {showDelete && (
           <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-300 hover:text-red-500" onClick={() => onDelete(tx.id)}>
             <Trash2 className="w-4 h-4" />

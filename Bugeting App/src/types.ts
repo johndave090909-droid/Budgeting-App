@@ -34,6 +34,7 @@ export interface BudgetItem {
   actual: number;
   month: string;   // "YYYY-MM"
   person?: string; // "p0" | "p1" — optional for backward compat during migration
+  salaryIdx?: number; // which salary paycheck this belongs to (0-based, undefined = 0)
 }
 
 export interface Bill {
@@ -43,7 +44,8 @@ export interface Bill {
   dueDay: number;       // day of month (1–31)
   type: 'fixed' | 'variable';
   person?: string;      // "p0" | "p1" | "both"
-  paidAmounts: Record<string, number>; // { "2026-04": 120.50 }
+  paidAmounts: Record<string, number>;  // { "2026-04": 120.50 }
+  paidSalary?: Record<string, number>;  // { "2026-04": 0 } — salaryIdx that covered this bill
 }
 
 export const CATEGORIES: Record<TransactionType, Category[]> = {
