@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   LayoutDashboard,
@@ -20,6 +20,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Settings,
+  Undo2,
+  Redo2,
 } from 'lucide-react';
 import { useBudget, getPersonIds } from './hooks/useBudget';
 import { CATEGORIES, TransactionType, BudgetItem, Bill } from './types';
@@ -361,6 +363,54 @@ export default function App() {
     setEditingItemId(null);
   };
 
+  // ── Undo / Redo ──────────────────────────────────────────────────
+  type HistoryAction = { undo: () => Promise<void>; redo: () => Promise<void> };
+  const undoStack = useRef<HistoryAction[]>([]);
+  const redoStack = useRef<HistoryAction[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  const pushHistory = (action: HistoryAction) => {
+    undoStack.current = [...undoStack.current, action];
+    redoStack.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  };
+
+  const handleUndo = useCallback(async () => {
+    if (undoStack.current.length === 0) return;
+    const action = undoStack.current[undoStack.current.length - 1];
+    undoStack.current = undoStack.current.slice(0, -1);
+    redoStack.current = [...redoStack.current, action];
+    setCanUndo(undoStack.current.length > 0);
+    setCanRedo(true);
+    await action.undo();
+  }, []);
+
+  const handleRedo = useCallback(async () => {
+    if (redoStack.current.length === 0) return;
+    const action = redoStack.current[redoStack.current.length - 1];
+    redoStack.current = redoStack.current.slice(0, -1);
+    undoStack.current = [...undoStack.current, action];
+    setCanRedo(redoStack.current.length > 0);
+    setCanUndo(true);
+    await action.redo();
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleUndo, handleRedo]);
+
   // ── Bill editing ─────────────────────────────────────────────────
   const [editingBillId, setEditingBillId] = useState<string | null>(null);
   const [editBill, setEditBill] = useState({
@@ -397,12 +447,13 @@ export default function App() {
 
   const handleAddBudgetItem = async () => {
     if (!newBudgetName || !newBudgetGroup) return;
-    const salaryCount = Math.max(1, monthlyTransactions.filter(
-      (t) => t.type === 'income' && (t.person === activePerson || t.person === 'both')
-    ).length);
-    for (let i = 0; i < salaryCount; i++) {
-      await addBudgetItem({ group: newBudgetGroup, name: newBudgetName, planned: 0, actual: 0, month: activeMonth, person: activePerson, salaryIdx: i });
-    }
+    const fields = { group: newBudgetGroup, name: newBudgetName, planned: 0, actual: 0, month: activeMonth, person: activePerson, salaryIdx: activeSalaryIdx };
+    const docRef = await addBudgetItem(fields);
+    let currentId = docRef.id;
+    pushHistory({
+      undo: async () => { await deleteBudgetItem(currentId); },
+      redo: async () => { const ref = await addBudgetItem(fields); currentId = ref.id; },
+    });
     setNewBudgetName('');
     setNewBudgetGroup('');
     setIsAddBudgetOpen(false);
@@ -927,7 +978,15 @@ export default function App() {
             <motion.div key="budget" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-5">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-lg font-bold">Budget Plan</h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-lg font-bold">Budget Plan</h2>
+                    <button onClick={handleUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" className={`p-1.5 rounded-lg transition-colors ${canUndo ? 'text-zinc-500 hover:bg-zinc-100' : 'text-zinc-200 cursor-not-allowed'}`}>
+                      <Undo2 className="w-4 h-4" />
+                    </button>
+                    <button onClick={handleRedo} disabled={!canRedo} title="Redo (Ctrl+Y)" className={`p-1.5 rounded-lg transition-colors ${canRedo ? 'text-zinc-500 hover:bg-zinc-100' : 'text-zinc-200 cursor-not-allowed'}`}>
+                      <Redo2 className="w-4 h-4" />
+                    </button>
+                  </div>
                   {/* Person tabs — dynamic */}
                   <div className="flex flex-wrap gap-1 mt-1">
                     {personIds.map((pid, i) => (
@@ -1266,11 +1325,13 @@ export default function App() {
                 onClick={async () => {
                   const item = budgetItems.find((b) => b.id === confirmDeleteId);
                   if (item) {
-                    const siblings = budgetItems.filter((b) =>
-                      b.name === item.name && b.group === item.group &&
-                      b.month === item.month && (b.person ?? 'p0') === (item.person ?? 'p0')
-                    );
-                    await Promise.all(siblings.map((b) => deleteBudgetItem(b.id)));
+                    const { id: _id, ...fields } = item;
+                    let currentId = confirmDeleteId;
+                    await deleteBudgetItem(currentId);
+                    pushHistory({
+                      undo: async () => { const ref = await addBudgetItem(fields); currentId = ref.id; },
+                      redo: async () => { await deleteBudgetItem(currentId); },
+                    });
                   } else {
                     await deleteBudgetItem(confirmDeleteId);
                   }
