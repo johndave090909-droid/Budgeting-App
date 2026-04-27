@@ -147,6 +147,14 @@ export default function App() {
     [transactions, activeMonth]
   );
 
+  // Income transactions for the active month sorted oldest → newest (Salary 1 = earliest)
+  const monthlySalaries = useMemo(
+    () => monthlyTransactions
+      .filter((t) => t.type === 'income')
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    [monthlyTransactions]
+  );
+
   const [activeSalaryIdx, setActiveSalaryIdx] = useState(0);
 
   useEffect(() => { setActiveSalaryIdx(0); }, [activePerson, activeMonth]);
@@ -928,7 +936,7 @@ export default function App() {
                               <>
                                 <p className="text-sm font-bold text-emerald-600">${paidAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
                                 {bill.paidSalary?.[activeMonth] !== undefined && (() => {
-                                  const allIncome = monthlyTransactions.filter((t) => t.type === 'income');
+                                  const allIncome = monthlySalaries;
                                   const idx = bill.paidSalary[activeMonth];
                                   const tx = allIncome[idx];
                                   if (!tx) return null;
@@ -1053,8 +1061,8 @@ export default function App() {
 
               {/* Salary tabs + remaining balance */}
               {(() => {
-                const salaries = monthlyTransactions.filter(
-                  (t) => t.type === 'income' && (t.person === activePerson || t.person === 'both')
+                const salaries = monthlySalaries.filter(
+                  (t) => t.person === activePerson || t.person === 'both'
                 );
                 const currentSalaryAmount = salaries[activeSalaryIdx]?.amount ?? 0;
                 const salaryBillPayments = bills
@@ -1379,8 +1387,7 @@ export default function App() {
       {/* Pay Bill Modal */}
       {payingBill && (() => {
         // Build a flat list of all salaries grouped by person, with per-person index
-        const allSalaries = monthlyTransactions
-          .filter((t) => t.type === 'income')
+        const allSalaries = monthlySalaries
           .map((t) => {
             const pid = t.person && t.person !== 'both' ? t.person : 'p0';
             const name = personNames[parseInt(pid.replace('p', ''))] ?? pid;
