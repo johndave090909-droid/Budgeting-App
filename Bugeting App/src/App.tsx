@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { Settings, ChevronLeft, ChevronRight, Trash2, Plus, Check, X } from 'lucide-react';
+import { Settings, ChevronLeft, ChevronRight, ChevronDown, Trash2, Plus, Check, X } from 'lucide-react';
 import { format, addMonths, subMonths } from 'date-fns';
 import { useBudget, getPersonIds } from './hooks/useBudget';
 import { BudgetItem, PersonIncome } from './types';
@@ -69,7 +69,7 @@ function EditableAmt({
     return (
       <input
         ref={inputRef}
-        className="w-20 bg-zinc-800 rounded px-1 py-0.5 text-right text-sm font-mono outline-none border border-emerald-500"
+        className="w-20 bg-zinc-800 rounded px-1 py-0.5 text-right text-base font-mono outline-none border border-emerald-500"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
@@ -124,7 +124,7 @@ function EditableText({
     return (
       <input
         ref={inputRef}
-        className={`bg-zinc-800 rounded px-1 py-0.5 text-sm outline-none border border-emerald-500 w-full ${className}`}
+        className={`bg-zinc-800 rounded px-1 py-0.5 text-base outline-none border border-emerald-500 w-full ${className}`}
         value={draft}
         placeholder={placeholder}
         onChange={(e) => setDraft(e.target.value)}
@@ -160,6 +160,7 @@ export default function App() {
   const [isAddingGroup, setIsAddingGroup] = useState(false);
   const [confirmDeleteItem, setConfirmDeleteItem] = useState<string | null>(null);
   const [confirmDeleteGroup, setConfirmDeleteGroup] = useState<string | null>(null);
+  const [incomeOpen, setIncomeOpen] = useState(false);
 
   const {
     income,
@@ -376,37 +377,54 @@ export default function App() {
         </div>
 
         {/* ── Income section ── */}
-        <div className="bg-zinc-900 rounded-xl p-4 mb-3">
-          <div className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase mb-3">
-            Income
-          </div>
-          <div className="space-y-1.5">
-            {INCOME_FIELDS.map(({ key, label }) => (
-              <div key={key} className="flex items-center justify-between">
-                <span className="text-sm text-zinc-300">{label}</span>
-                <EditableAmt
-                  value={(personIncome as Record<string, number>)[key]}
-                  onSave={(v) => updateIncome(key, v)}
-                />
+        <div className="bg-zinc-900 rounded-xl mb-3 overflow-hidden">
+          {/* Header row — always visible */}
+          <button
+            onClick={() => setIncomeOpen((o) => !o)}
+            className="w-full flex items-center justify-between px-4 py-3"
+          >
+            <span className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase">Income</span>
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-bold font-mono text-zinc-100">{fmt(totalSalary)}</span>
+              <ChevronDown
+                size={15}
+                className={`text-zinc-500 transition-transform duration-200 ${incomeOpen ? 'rotate-180' : ''}`}
+              />
+            </div>
+          </button>
+
+          {/* Collapsible body */}
+          {incomeOpen && (
+            <div className="px-4 pb-4 border-t border-zinc-800">
+              <div className="space-y-1.5 mt-3">
+                {INCOME_FIELDS.map(({ key, label }) => (
+                  <div key={key} className="flex items-center justify-between">
+                    <span className="text-sm text-zinc-300">{label}</span>
+                    <EditableAmt
+                      value={(personIncome as Record<string, number>)[key]}
+                      onSave={(v) => updateIncome(key, v)}
+                    />
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="border-t border-zinc-700 mt-3 pt-3 flex justify-between items-center">
-            <span className="text-sm font-bold text-zinc-100">Total Salary</span>
-            <span className="text-sm font-bold font-mono text-zinc-100">{fmt(totalSalary)}</span>
-          </div>
-          <div className="border-t border-zinc-800 mt-3 pt-3 grid grid-cols-3 gap-2 text-center">
-            {MANUAL_FIELDS.map(({ key, label }) => (
-              <div key={key} className="flex flex-col items-center gap-1">
-                <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{label}</span>
-                <EditableAmt
-                  value={(personIncome as Record<string, number>)[key]}
-                  onSave={(v) => updateIncome(key, v)}
-                  className="text-zinc-200"
-                />
+              <div className="border-t border-zinc-700 mt-3 pt-3 flex justify-between items-center">
+                <span className="text-sm font-bold text-zinc-100">Total Salary</span>
+                <span className="text-sm font-bold font-mono text-zinc-100">{fmt(totalSalary)}</span>
               </div>
-            ))}
-          </div>
+              <div className="border-t border-zinc-800 mt-3 pt-3 grid grid-cols-3 gap-2 text-center">
+                {MANUAL_FIELDS.map(({ key, label }) => (
+                  <div key={key} className="flex flex-col items-center gap-1">
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{label}</span>
+                    <EditableAmt
+                      value={(personIncome as Record<string, number>)[key]}
+                      onSave={(v) => updateIncome(key, v)}
+                      className="text-zinc-200"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── Summary ── */}
@@ -590,7 +608,7 @@ export default function App() {
                 <div className="flex items-center gap-2 px-3 py-2 border-t border-zinc-800">
                   <input
                     autoFocus
-                    className="flex-1 bg-zinc-800 rounded px-2 py-1 text-sm outline-none border border-emerald-500 text-zinc-100 placeholder-zinc-600"
+                    className="flex-1 bg-zinc-800 rounded px-2 py-1 text-base outline-none border border-emerald-500 text-zinc-100 placeholder-zinc-600"
                     placeholder="Item name"
                     value={newItemName}
                     onChange={(e) => setNewItemName(e.target.value)}
@@ -640,7 +658,7 @@ export default function App() {
           <div className="flex items-center gap-2 mb-4">
             <input
               autoFocus
-              className="flex-1 bg-zinc-900 rounded-xl px-3 py-2 text-sm outline-none border border-emerald-500 text-zinc-100 placeholder-zinc-600"
+              className="flex-1 bg-zinc-900 rounded-xl px-3 py-2 text-base outline-none border border-emerald-500 text-zinc-100 placeholder-zinc-600"
               placeholder="Category name"
               value={newGroupName}
               onChange={(e) => setNewGroupName(e.target.value)}
