@@ -33,6 +33,11 @@ const INCOME_FIELDS: { key: IncomeField; label: string }[] = [
   { key: 'others',          label: 'Others' },
 ];
 
+const MANUAL_FIELDS: { key: IncomeField; label: string }[] = [
+  { key: 'currentBalance1', label: 'Bal. Sal. 1' },
+  { key: 'currentBalance2', label: 'Bal. Sal. 2' },
+  { key: 'savings',         label: 'Savings' },
+];
 
 // ── Editable amount (click → number input) ───────────────────────────────────
 function EditableAmt({
@@ -210,7 +215,7 @@ export default function App() {
   // Running Balance = Total Income − all actual (both salary panels)
   const totalActualAll  = personItems.reduce((s, b) => s + (b.actual  ?? 0), 0);
   const totalPlannedAll = personItems.reduce((s, b) => s + (b.planned ?? 0), 0);
-  const runningBalance  = totalSalary - totalActualAll;
+  const runningBalance  = totalSalary + personIncome.savings - totalActualAll;
   const budgetBalance   = totalSalary - totalPlannedAll;
 
   // Items for the active salary panel
@@ -385,6 +390,18 @@ export default function App() {
           <div className="border-t border-zinc-700 mt-3 pt-3 flex justify-between items-center">
             <span className="text-sm font-bold text-zinc-100">Total Salary</span>
             <span className="text-sm font-bold font-mono text-zinc-100">{fmt(totalSalary)}</span>
+          </div>
+          <div className="border-t border-zinc-800 mt-3 pt-3 grid grid-cols-3 gap-2 text-center">
+            {MANUAL_FIELDS.map(({ key, label }) => (
+              <div key={key} className="flex flex-col items-center gap-1">
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{label}</span>
+                <EditableAmt
+                  value={(personIncome as Record<string, number>)[key]}
+                  onSave={(v) => updateIncome(key, v)}
+                  className="text-zinc-200"
+                />
+              </div>
+            ))}
           </div>
         </div>
 
