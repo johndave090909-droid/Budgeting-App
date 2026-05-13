@@ -205,11 +205,11 @@ export default function App() {
   }, [income, activePerson, activeMonth]);
 
   const totalSalary =
-    personIncome.wage1 +
-    personIncome.wage2 +
-    personIncome.scholarships +
-    personIncome.previousBalance +
-    personIncome.others;
+    (personIncome.wage1           ?? 0) +
+    (personIncome.wage2           ?? 0) +
+    (personIncome.scholarships    ?? 0) +
+    (personIncome.previousBalance ?? 0) +
+    (personIncome.others          ?? 0);
 
   // ── Derived: budget items for current person/month ───────────────────────
   const personItems = useMemo(
@@ -220,7 +220,7 @@ export default function App() {
   // Running Balance = Total Income − all actual (both salary panels)
   const totalActualAll  = personItems.reduce((s, b) => s + (b.actual  ?? 0), 0);
   const totalPlannedAll = personItems.reduce((s, b) => s + (b.planned ?? 0), 0);
-  const runningBalance  = totalSalary + personIncome.savings - totalActualAll;
+  const runningBalance  = totalSalary + (personIncome.savings ?? 0) - totalActualAll;
   const budgetBalance   = totalSalary - totalPlannedAll;
 
   // Items for the active salary panel
@@ -233,7 +233,7 @@ export default function App() {
   const panelActual = activeItems.reduce((s, b) => s + (b.actual  ?? 0), 0);
 
   // Wage tied to each salary panel
-  const panelWage      = activeSalary === 0 ? personIncome.wage1 : personIncome.wage2;
+  const panelWage      = activeSalary === 0 ? (personIncome.wage1 ?? 0) : (personIncome.wage2 ?? 0);
   const panelRemaining = panelWage - panelActual;
 
   // Group items → sorted by GROUP_ORDER
@@ -401,7 +401,7 @@ export default function App() {
                   <div key={key} className="flex items-center justify-between">
                     <span className="text-sm text-zinc-300">{label}</span>
                     <EditableAmt
-                      value={(personIncome as Record<string, number>)[key]}
+                      value={((personIncome as Record<string, number>)[key] ?? 0)}
                       onSave={(v) => updateIncome(key, v)}
                     />
                   </div>
@@ -416,7 +416,7 @@ export default function App() {
                   <div key={key} className="flex flex-col items-center gap-1">
                     <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{label}</span>
                     <EditableAmt
-                      value={(personIncome as Record<string, number>)[key]}
+                      value={((personIncome as Record<string, number>)[key] ?? 0)}
                       onSave={(v) => updateIncome(key, v)}
                       className="text-zinc-200"
                     />

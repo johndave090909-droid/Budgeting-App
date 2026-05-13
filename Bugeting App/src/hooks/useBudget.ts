@@ -70,24 +70,13 @@ export function useBudget() {
     fields: Partial<Omit<PersonIncome, 'id' | 'person' | 'month'>>
   ) => {
     const docId = `${person}_${month}`;
-    const existing = income.find((i) => i.person === person && i.month === month);
-    if (existing) {
-      await updateDoc(doc(db, 'personIncome', docId), fields as Record<string, unknown>);
-    } else {
-      await setDoc(doc(db, 'personIncome', docId), {
-        person,
-        month,
-        wage1: 0,
-        wage2: 0,
-        scholarships: 0,
-        previousBalance: 0,
-        others: 0,
-        currentBalance1: 0,
-        currentBalance2: 0,
-        savings: 0,
-        ...fields,
-      });
-    }
+    // merge:true ensures only the provided fields are written —
+    // never overwrites the whole doc, safe even before the snapshot arrives
+    await setDoc(
+      doc(db, 'personIncome', docId),
+      { person, month, ...fields },
+      { merge: true }
+    );
   };
 
   const seedMonthBudgetItems = async (month: string, personId: string) => {
