@@ -7,6 +7,7 @@ import {
   doc,
   updateDoc,
   getDocs,
+  getDoc,
   setDoc,
   query,
   where,
@@ -36,7 +37,8 @@ export function useBudget() {
   const [income, setIncome]           = useState<PersonIncome[]>([]);
   const [budgetItems, setBudgetItems] = useState<BudgetItem[]>([]);
   const [personNames, setPersonNames] = useState<string[]>(['Jovy', 'Dave']);
-  const seedingRef = useRef<Set<string>>(new Set());
+  const seedingRef       = useRef<Set<string>>(new Set());
+  const incomeSeededRef  = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     return onSnapshot(collection(db, 'personIncome'), (snap) =>
@@ -146,6 +148,59 @@ export function useBudget() {
     }
   };
 
+  // ── Seed income for a new month — carries ending balance as previousBalance ─
+  const seedMonthIncome = async (month: string, personId: string) => {
+    const key = `income-${month}-${personId}`;
+    if (incomeSeededRef.current.has(key)) return;
+    incomeSeededRef.current.add(key);
+
+    try {
+      const docId = `${personId}_${month}`;
+      const existing = await getDoc(doc(db, 'personIncome', docId));
+      if (existing.exists()) return;
+
+      // Derive previous month string
+      const [y, m] = month.split('-').map(Number);
+      const prevMonth = m === 1
+        ? `${y - 1}-12`
+        : `${y}-${String(m - 1).padStart(2, '0')}`;
+
+      // Get previous month's income
+      const prevDocId = `${personId}_${prevMonth}`;
+      const prevSnap  = await getDoc(doc(db, 'personIncome', prevDocId));
+
+      let previousBalance = 0;
+
+      if (prevSnap.exists()) {
+        const prev = prevSnap.data() as Omit<PersonIncome, 'id'>;
+        const prevTotal = prev.wage1 + prev.wage2 + prev.scholarships + prev.previousBalance + prev.others;
+
+        // Get previous month's actual spending
+        const prevItems = await getDocs(
+          query(collection(db, 'budgetItems'), where('person', '==', personId), where('month', '==', prevMonth))
+        );
+        const prevActual = prevItems.docs.reduce((s, d) => s + ((d.data().actual as number) ?? 0), 0);
+
+        previousBalance = prevTotal + (prev.savings ?? 0) - prevActual;
+      }
+
+      await setDoc(doc(db, 'personIncome', docId), {
+        person: personId,
+        month,
+        wage1: 0,
+        wage2: 0,
+        scholarships: 0,
+        previousBalance,
+        others: 0,
+        currentBalance1: 0,
+        currentBalance2: 0,
+        savings: 0,
+      });
+    } finally {
+      incomeSeededRef.current.delete(key);
+    }
+  };
+
   const updateBudgetItem = (id: string, fields: Partial<Omit<BudgetItem, 'id'>>) =>
     updateDoc(doc(db, 'budgetItems', id), fields as Record<string, unknown>);
 
@@ -162,6 +217,7 @@ export function useBudget() {
     updatePersonNames,
     upsertIncome,
     seedMonthBudgetItems,
+    seedMonthIncome,
     updateBudgetItem,
     addBudgetItem,
     deleteBudgetItem,

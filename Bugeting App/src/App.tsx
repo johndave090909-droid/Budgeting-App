@@ -168,6 +168,7 @@ export default function App() {
     updatePersonNames,
     upsertIncome,
     seedMonthBudgetItems,
+    seedMonthIncome,
     updateBudgetItem,
     addBudgetItem,
     deleteBudgetItem,
@@ -175,9 +176,12 @@ export default function App() {
 
   const personIds = useMemo(() => getPersonIds(personNames.length), [personNames.length]);
 
-  // Seed budget items whenever month or persons change
+  // Seed budget items and income whenever month or persons change
   useEffect(() => {
-    personIds.forEach((pid) => seedMonthBudgetItems(activeMonth, pid));
+    personIds.forEach((pid) => {
+      seedMonthBudgetItems(activeMonth, pid);
+      seedMonthIncome(activeMonth, pid);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeMonth, personIds.length]);
 
