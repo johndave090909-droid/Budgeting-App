@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { Settings, ChevronLeft, ChevronRight, ChevronDown, Trash2, Plus, Check, X } from 'lucide-react';
+import { Settings, ChevronLeft, ChevronRight, ChevronDown, Trash2, Plus, Check, X, Wallet, MoreHorizontal } from 'lucide-react';
 import { format, addMonths, subMonths } from 'date-fns';
 import { useBudget, getPersonIds } from './hooks/useBudget';
 import { BudgetItem, PersonIncome } from './types';
@@ -161,6 +161,7 @@ export default function App() {
   const [confirmDeleteItem, setConfirmDeleteItem] = useState<string | null>(null);
   const [confirmDeleteGroup, setConfirmDeleteGroup] = useState<string | null>(null);
   const [incomeOpen, setIncomeOpen] = useState(false);
+  const [itemDrawerId, setItemDrawerId] = useState<string | null>(null);
 
   const {
     income,
@@ -223,18 +224,31 @@ export default function App() {
   const runningBalance  = totalSalary + (personIncome.savings ?? 0) - totalActualAll;
   const budgetBalance   = totalSalary - totalPlannedAll;
 
+  // Others bucket — actuals from items flagged useOthers come out of personIncome.others
+  const othersUsed      = personItems.reduce((s, b) => s + (b.useOthers ? (b.actual ?? 0) : 0), 0);
+  const othersRemaining = (personIncome.others ?? 0) - othersUsed;
+
   // Items for the active salary panel
   const activeItems = useMemo(
     () => personItems.filter((b) => (b.salaryIdx ?? 0) === activeSalary),
     [personItems, activeSalary]
   );
 
-  const panelBudget = activeItems.reduce((s, b) => s + (b.planned ?? 0), 0);
-  const panelActual = activeItems.reduce((s, b) => s + (b.actual  ?? 0), 0);
+  const panelBudget       = activeItems.reduce((s, b) => s + (b.planned ?? 0), 0);
+  const panelActual       = activeItems.reduce((s, b) => s + (b.actual  ?? 0), 0);
+  // Actuals charged to the wage panel exclude items paid from the Others pool
+  const panelActualFromWage = activeItems.reduce(
+    (s, b) => s + (b.useOthers ? 0 : (b.actual ?? 0)),
+    0
+  );
 
   // Wage tied to each salary panel
   const panelWage      = activeSalary === 0 ? (personIncome.wage1 ?? 0) : (personIncome.wage2 ?? 0);
-  const panelRemaining = panelWage - panelActual;
+  const panelRemaining = panelWage - panelActualFromWage;
+
+  const drawerItem = itemDrawerId
+    ? personItems.find((b) => b.id === itemDrawerId) ?? null
+    : null;
 
   // Group items → sorted by GROUP_ORDER
   const groups = useMemo(() => {
@@ -400,10 +414,22 @@ export default function App() {
                 {INCOME_FIELDS.map(({ key, label }) => (
                   <div key={key} className="flex items-center justify-between">
                     <span className="text-sm text-zinc-300">{label}</span>
-                    <EditableAmt
-                      value={((personIncome as Record<string, number>)[key] ?? 0)}
-                      onSave={(v) => updateIncome(key, v)}
-                    />
+                    <div className="flex items-center gap-2">
+                      {key === 'others' && othersUsed > 0 && (
+                        <span
+                          className={`text-[10px] font-mono ${
+                            othersRemaining >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                          }`}
+                          title={`Used ${fmt(othersUsed)} of ${fmt(personIncome.others ?? 0)}`}
+                        >
+                          {fmt(othersRemaining)} left
+                        </span>
+                      )}
+                      <EditableAmt
+                        value={((personIncome as Record<string, number>)[key] ?? 0)}
+                        onSave={(v) => updateIncome(key, v)}
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -508,7 +534,7 @@ export default function App() {
         )}
 
         {/* ── Table header ── */}
-        <div className="grid grid-cols-[1fr_5rem_5rem_4.5rem_1.25rem] gap-1 px-3 mb-1">
+        <div className="grid grid-cols-[1fr_5rem_5rem_4.5rem_2.5rem] gap-1 px-3 mb-1">
           <span className="text-[10px] text-zinc-600 uppercase tracking-wide">Item</span>
           <span className="text-[10px] text-zinc-600 uppercase tracking-wide text-right">Budget</span>
           <span className="text-[10px] text-zinc-600 uppercase tracking-wide text-right">Actual</span>
@@ -570,13 +596,22 @@ export default function App() {
                   ) : (
                     <div
                       key={item.id}
-                      className="grid grid-cols-[1fr_5rem_5rem_4.5rem_1.25rem] gap-1 px-3 py-2 items-center"
+                      className="grid grid-cols-[1fr_5rem_5rem_4.5rem_2.5rem] gap-1 px-3 py-2 items-center"
                     >
-                      <EditableText
-                        value={item.name}
-                        onSave={(v) => updateBudgetItem(item.id, { name: v })}
-                        className="text-zinc-200 min-w-0 truncate"
-                      />
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        {item.useOthers && (
+                          <Wallet
+                            size={11}
+                            className="text-sky-400 shrink-0"
+                            aria-label="Paid from Others"
+                          />
+                        )}
+                        <EditableText
+                          value={item.name}
+                          onSave={(v) => updateBudgetItem(item.id, { name: v })}
+                          className="text-zinc-200 min-w-0 truncate"
+                        />
+                      </div>
                       <EditableAmt
                         value={item.planned}
                         onSave={(v) => updateBudgetItem(item.id, { planned: v })}
@@ -592,12 +627,21 @@ export default function App() {
                         className="text-center text-[11px] text-amber-400 truncate"
                         emptyClass="text-zinc-700"
                       />
-                      <button
-                        onClick={() => setConfirmDeleteItem(item.id)}
-                        className="text-zinc-700 hover:text-rose-400 transition-colors flex justify-end"
-                      >
-                        <Trash2 size={12} />
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => setItemDrawerId(item.id)}
+                          className="text-zinc-700 hover:text-emerald-400 transition-colors"
+                          aria-label="Item options"
+                        >
+                          <MoreHorizontal size={14} />
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteItem(item.id)}
+                          className="text-zinc-700 hover:text-rose-400 transition-colors"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
                     </div>
                   )
                 )}
@@ -643,7 +687,7 @@ export default function App() {
               )}
 
               {/* Group subtotal */}
-              <div className="grid grid-cols-[1fr_5rem_5rem_4.5rem_1.25rem] gap-1 px-3 py-2 border-t border-zinc-700 bg-zinc-800/40">
+              <div className="grid grid-cols-[1fr_5rem_5rem_4.5rem_2.5rem] gap-1 px-3 py-2 border-t border-zinc-700 bg-zinc-800/40">
                 <span className="text-[11px] text-zinc-500 italic">Subtotal</span>
                 <span className="text-[11px] font-mono text-right text-zinc-400">{fmt(groupBudget)}</span>
                 <span className="text-[11px] font-mono text-right text-zinc-400">{fmt(groupActual)}</span>
@@ -690,7 +734,7 @@ export default function App() {
         )}
 
         {/* ── Grand total ── */}
-        <div className="bg-zinc-800 rounded-xl px-3 py-3 grid grid-cols-[1fr_5rem_5rem_4.5rem_1.25rem] gap-1 items-center">
+        <div className="bg-zinc-800 rounded-xl px-3 py-3 grid grid-cols-[1fr_5rem_5rem_4.5rem_2.5rem] gap-1 items-center">
           <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-300">Total</span>
           <span className="text-sm font-bold font-mono text-right text-zinc-100">{fmt(panelBudget)}</span>
           <span className="text-sm font-bold font-mono text-right text-zinc-100">{fmt(panelActual)}</span>
@@ -698,6 +742,77 @@ export default function App() {
         </div>
 
       </div>
+
+      {/* ── Item detail drawer ── */}
+      <Drawer open={itemDrawerId !== null} onOpenChange={(o) => !o && setItemDrawerId(null)}>
+        <DrawerContent>
+          <DrawerHeader>
+            <DrawerTitle>{drawerItem?.name || 'Item'}</DrawerTitle>
+          </DrawerHeader>
+          {drawerItem && (
+            <div className="px-4 pb-10 space-y-5 overflow-y-auto">
+              <div>
+                <Label className="text-xs text-zinc-400 mb-2 block uppercase tracking-wide">
+                  Name
+                </Label>
+                <Input
+                  value={drawerItem.name}
+                  onChange={(e) => updateBudgetItem(drawerItem.id, { name: e.target.value })}
+                  className="w-full"
+                />
+              </div>
+
+              <button
+                onClick={() =>
+                  updateBudgetItem(drawerItem.id, { useOthers: !drawerItem.useOthers })
+                }
+                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-colors ${
+                  drawerItem.useOthers
+                    ? 'bg-sky-900/30 border-sky-700'
+                    : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'
+                }`}
+              >
+                <div className="flex items-center gap-3 text-left">
+                  <Wallet
+                    size={18}
+                    className={drawerItem.useOthers ? 'text-sky-400' : 'text-zinc-500'}
+                  />
+                  <div>
+                    <div className="text-sm font-semibold text-zinc-100">Pay from Others</div>
+                    <div className="text-[11px] text-zinc-400">
+                      Deduct this item's actual from the Income "Others" pool
+                      {drawerItem.useOthers
+                        ? ` — ${fmt(othersRemaining)} left`
+                        : ''}
+                    </div>
+                  </div>
+                </div>
+                <div
+                  className={`w-10 h-6 rounded-full p-0.5 transition-colors ${
+                    drawerItem.useOthers ? 'bg-sky-500' : 'bg-zinc-700'
+                  }`}
+                >
+                  <div
+                    className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                      drawerItem.useOthers ? 'translate-x-4' : ''
+                    }`}
+                  />
+                </div>
+              </button>
+
+              <Button
+                onClick={() => {
+                  setConfirmDeleteItem(drawerItem.id);
+                  setItemDrawerId(null);
+                }}
+                className="w-full bg-rose-600 hover:bg-rose-500 text-white"
+              >
+                Delete item
+              </Button>
+            </div>
+          )}
+        </DrawerContent>
+      </Drawer>
 
       {/* ── Settings drawer ── */}
       <Drawer open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>

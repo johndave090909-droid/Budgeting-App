@@ -22,4 +22,5 @@ export interface BudgetItem {
   month: string;    // 'YYYY-MM'
   person: string;   // 'p0' | 'p1'
   salaryIdx: number; // 0 = Salary 1, 1 = Salary 2
+  useOthers?: boolean; // when true, item's actual is paid from the Income "Others" pool
 }
